@@ -8,6 +8,35 @@ function randomBetween(min: number, max: number) {
   return Math.random() * (max - min) + min;
 }
 
+// Базовые цены для генерации уровней
+const BASE_PRICES: Record<string, number> = {
+  "EUR/USD": 1.0843, "GBP/USD": 1.2671, "USD/JPY": 149.82,
+  "AUD/USD": 0.6514, "USD/CAD": 1.3628, "USD/CHF": 0.8972,
+  "NZD/USD": 0.5983, "EUR/GBP": 0.8561, "EUR/JPY": 162.34, "GBP/JPY": 189.54,
+};
+
+function generateLevels(asset: string) {
+  const base = BASE_PRICES[asset] ?? 1.0;
+  const pip = base > 10 ? 0.1 : 0.001;
+  const price = +(base + randomBetween(-pip * 5, pip * 5)).toFixed(base > 10 ? 2 : 4);
+  const s1 = +(price - pip * Math.floor(randomBetween(8, 18))).toFixed(base > 10 ? 2 : 4);
+  const s2 = +(s1 - pip * Math.floor(randomBetween(8, 18))).toFixed(base > 10 ? 2 : 4);
+  const r1 = +(price + pip * Math.floor(randomBetween(8, 18))).toFixed(base > 10 ? 2 : 4);
+  const r2 = +(r1 + pip * Math.floor(randomBetween(8, 18))).toFixed(base > 10 ? 2 : 4);
+  return { price, s1, s2, r1, r2 };
+}
+
+function generateTA() {
+  const rsi = Math.floor(randomBetween(28, 72));
+  const macdVal = +(randomBetween(-0.0015, 0.0015)).toFixed(4);
+  const macdSignal = macdVal > 0 ? "BUY" : "SELL";
+  const ema9 = randomBetween(0.9995, 1.0005);
+  const ema21 = randomBetween(0.9990, 1.0008);
+  const emaCross = ema9 > ema21 ? "BUY" : "SELL";
+  const bbPos = Math.floor(randomBetween(10, 90)); // позиция внутри полос Боллинджера %
+  return { rsi, macdVal, macdSignal, emaCross, bbPos };
+}
+
 function generateSignal(id: number) {
   const asset = ASSETS[Math.floor(Math.random() * ASSETS.length)];
   const direction = Math.random() > 0.5 ? "UP" : "DOWN";
@@ -17,7 +46,9 @@ function generateSignal(id: number) {
   const now = new Date();
   now.setMinutes(now.getMinutes() - Math.floor(Math.random() * 30));
   const expiry = "3 мин";
-  return { id, asset, direction, accuracy, tf, time: now, expiry, strength: Math.floor(randomBetween(80, 100)) };
+  const levels = generateLevels(asset);
+  const ta = generateTA();
+  return { id, asset, direction, accuracy, tf, time: now, expiry, strength: Math.floor(randomBetween(80, 100)), levels, ta };
 }
 
 function generateHistory(id: number) {
@@ -86,68 +117,202 @@ function LiveDot() {
   );
 }
 
+
 function SignalCard({ signal, index }: { signal: ReturnType<typeof generateSignal>; index: number }) {
   const isUp = signal.direction === "UP";
+  const [expanded, setExpanded] = useState(false);
+  const { levels, ta } = signal;
+
   return (
     <div
-      className="animate-fade-in rounded-lg border p-4 flex flex-col gap-3 transition-all hover:border-[var(--sx-border-light)] cursor-pointer"
+      className="animate-fade-in rounded-lg border flex flex-col transition-all"
       style={{
         background: "var(--sx-surface)",
-        borderColor: "var(--sx-border)",
+        borderColor: expanded ? "var(--sx-border-light)" : "var(--sx-border)",
         animationDelay: `${index * 60}ms`,
         animationFillMode: "both",
         opacity: 0,
       }}
     >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="font-mono font-semibold text-sm text-[var(--sx-text)]">{signal.asset}</span>
+      {/* Main content */}
+      <div className="p-4 flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="font-mono font-semibold text-sm text-[var(--sx-text)]">{signal.asset}</span>
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded font-mono font-medium"
+              style={{ background: "var(--sx-border)", color: "var(--sx-text-muted)" }}
+            >
+              {signal.tf}
+            </span>
+          </div>
           <span
-            className="text-[10px] px-1.5 py-0.5 rounded font-mono font-medium"
-            style={{ background: "var(--sx-border)", color: "var(--sx-text-muted)" }}
+            className={`text-xs px-2 py-0.5 rounded font-mono font-semibold flex items-center gap-1 ${isUp ? "signal-badge-up" : "signal-badge-down"}`}
           >
-            {signal.tf}
+            {isUp ? "▲" : "▼"} {signal.direction}
           </span>
         </div>
-        <span
-          className={`text-xs px-2 py-0.5 rounded font-mono font-semibold flex items-center gap-1 ${isUp ? "signal-badge-up" : "signal-badge-down"}`}
-        >
-          {isUp ? "▲" : "▼"} {signal.direction}
-        </span>
+
+        {/* Strength bar */}
+        <div>
+          <div className="flex justify-between items-center mb-1">
+            <span className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Сила сигнала</span>
+            <span className="text-[10px] font-mono" style={{ color: isUp ? "var(--sx-green)" : "var(--sx-red)" }}>
+              {signal.strength}%
+            </span>
+          </div>
+          <div className="h-1 rounded-full" style={{ background: "var(--sx-border)" }}>
+            <div
+              className="h-1 rounded-full transition-all"
+              style={{ width: `${signal.strength}%`, background: isUp ? "var(--sx-green)" : "var(--sx-red)" }}
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between pt-1 border-t" style={{ borderColor: "var(--sx-border)" }}>
+          <div className="flex items-center gap-1 text-[var(--sx-text-muted)]">
+            <Icon name="Clock" size={11} />
+            <span className="font-mono text-[11px]">{formatTime(signal.time)}</span>
+          </div>
+          <span className="font-mono text-[11px] text-[var(--sx-text-muted)]">Экспирация: {signal.expiry}</span>
+          <div className="flex items-center gap-1">
+            <Icon name="Target" size={11} className="text-[var(--sx-text-muted)]" />
+            <span className="font-mono text-[11px]" style={{ color: "var(--sx-green)" }}>
+              {signal.accuracy}%
+            </span>
+          </div>
+        </div>
       </div>
 
-      {/* Strength bar */}
-      <div>
-        <div className="flex justify-between items-center mb-1">
-          <span className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Сила сигнала</span>
-          <span className="text-[10px] font-mono" style={{ color: isUp ? "var(--sx-green)" : "var(--sx-red)" }}>
-            {signal.strength}%
-          </span>
-        </div>
-        <div className="h-1 rounded-full" style={{ background: "var(--sx-border)" }}>
-          <div
-            className="h-1 rounded-full transition-all"
-            style={{
-              width: `${signal.strength}%`,
-              background: isUp ? "var(--sx-green)" : "var(--sx-red)",
-            }}
-          />
-        </div>
-      </div>
+      {/* Expand toggle */}
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center justify-center gap-1 py-1.5 border-t text-[10px] font-mono transition-colors hover:bg-[var(--sx-surface-2)]"
+        style={{ borderColor: "var(--sx-border)", color: "var(--sx-text-dim)" }}
+      >
+        <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={11} />
+        {expanded ? "Скрыть анализ" : "Технический анализ"}
+      </button>
 
-      <div className="flex items-center justify-between pt-1 border-t" style={{ borderColor: "var(--sx-border)" }}>
-        <div className="flex items-center gap-1 text-[var(--sx-text-muted)]">
-          <Icon name="Clock" size={11} />
-          <span className="font-mono text-[11px]">{formatTime(signal.time)}</span>
+      {/* Expanded: TA + Levels */}
+      {expanded && (
+        <div className="px-4 pb-4 flex flex-col gap-3 animate-fade-in border-t" style={{ borderColor: "var(--sx-border)" }}>
+
+          {/* Levels */}
+          <div className="pt-3">
+            <div className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider mb-2">Уровни S/R</div>
+            <div className="relative">
+              {/* Визуальная шкала уровней */}
+              <div className="flex flex-col gap-1">
+                {[
+                  { label: "R2", val: levels.r2, color: "var(--sx-red)" },
+                  { label: "R1", val: levels.r1, color: "var(--sx-red)", opacity: "0.7" },
+                  { label: "Цена", val: levels.price, color: "var(--sx-text)", isCurrent: true },
+                  { label: "S1", val: levels.s1, color: "var(--sx-green)", opacity: "0.7" },
+                  { label: "S2", val: levels.s2, color: "var(--sx-green)" },
+                ].map((l) => (
+                  <div key={l.label} className="flex items-center gap-2">
+                    <span className="font-mono text-[10px] w-7 text-right" style={{ color: l.color, opacity: l.opacity ?? 1 }}>
+                      {l.label}
+                    </span>
+                    <div className="flex-1 flex items-center gap-1">
+                      <div
+                        className="h-px flex-1"
+                        style={{
+                          background: l.isCurrent ? "var(--sx-text-muted)" : l.color,
+                          opacity: l.isCurrent ? 1 : 0.5,
+                          height: l.isCurrent ? "2px" : "1px",
+                        }}
+                      />
+                    </div>
+                    <span
+                      className="font-mono text-[10px] tabular-nums"
+                      style={{ color: l.isCurrent ? "var(--sx-text)" : l.color, opacity: l.opacity ?? 1, fontWeight: l.isCurrent ? 600 : 400 }}
+                    >
+                      {l.val}
+                    </span>
+                    {l.isCurrent && (
+                      <span className="w-1.5 h-1.5 rounded-full animate-pulse-dot" style={{ background: "var(--sx-text-muted)" }} />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Technical indicators */}
+          <div className="border-t pt-3" style={{ borderColor: "var(--sx-border)" }}>
+            <div className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider mb-2">Индикаторы</div>
+            <div className="grid grid-cols-2 gap-2">
+
+              {/* RSI */}
+              <div className="rounded p-2 flex items-center justify-between" style={{ background: "var(--sx-surface-2)" }}>
+                <div>
+                  <div className="font-mono text-[10px] text-[var(--sx-text-muted)]">RSI (14)</div>
+                  <div className="font-mono text-sm font-semibold tabular-nums" style={{
+                    color: ta.rsi >= 70 ? "var(--sx-red)" : ta.rsi <= 30 ? "var(--sx-green)" : "var(--sx-blue)"
+                  }}>
+                    {ta.rsi}
+                  </div>
+                </div>
+                <div className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{
+                  background: ta.rsi >= 70 ? "var(--sx-red-dim)" : ta.rsi <= 30 ? "var(--sx-green-dim)" : "var(--sx-blue-dim)",
+                  color: ta.rsi >= 70 ? "var(--sx-red)" : ta.rsi <= 30 ? "var(--sx-green)" : "var(--sx-blue)",
+                }}>
+                  {ta.rsi >= 70 ? "Перекуп." : ta.rsi <= 30 ? "Перепрод." : "Нейтрал"}
+                </div>
+              </div>
+
+              {/* MACD */}
+              <div className="rounded p-2 flex items-center justify-between" style={{ background: "var(--sx-surface-2)" }}>
+                <div>
+                  <div className="font-mono text-[10px] text-[var(--sx-text-muted)]">MACD</div>
+                  <div className="font-mono text-sm font-semibold tabular-nums" style={{
+                    color: ta.macdSignal === "BUY" ? "var(--sx-green)" : "var(--sx-red)"
+                  }}>
+                    {ta.macdVal > 0 ? "+" : ""}{ta.macdVal}
+                  </div>
+                </div>
+                <div className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{
+                  background: ta.macdSignal === "BUY" ? "var(--sx-green-dim)" : "var(--sx-red-dim)",
+                  color: ta.macdSignal === "BUY" ? "var(--sx-green)" : "var(--sx-red)",
+                }}>
+                  {ta.macdSignal}
+                </div>
+              </div>
+
+              {/* EMA Cross */}
+              <div className="rounded p-2 flex items-center justify-between" style={{ background: "var(--sx-surface-2)" }}>
+                <div>
+                  <div className="font-mono text-[10px] text-[var(--sx-text-muted)]">EMA 9/21</div>
+                  <div className="font-mono text-[10px] text-[var(--sx-text-muted)]">Пересечение</div>
+                </div>
+                <div className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{
+                  background: ta.emaCross === "BUY" ? "var(--sx-green-dim)" : "var(--sx-red-dim)",
+                  color: ta.emaCross === "BUY" ? "var(--sx-green)" : "var(--sx-red)",
+                }}>
+                  {ta.emaCross}
+                </div>
+              </div>
+
+              {/* Bollinger */}
+              <div className="rounded p-2" style={{ background: "var(--sx-surface-2)" }}>
+                <div className="font-mono text-[10px] text-[var(--sx-text-muted)] mb-1">Боллинджер</div>
+                <div className="relative h-2 rounded-full" style={{ background: "var(--sx-border)" }}>
+                  <div
+                    className="absolute top-0 h-2 w-2 rounded-full -translate-x-1/2 transition-all"
+                    style={{ left: `${ta.bbPos}%`, background: ta.bbPos > 75 ? "var(--sx-red)" : ta.bbPos < 25 ? "var(--sx-green)" : "var(--sx-blue)" }}
+                  />
+                </div>
+                <div className="flex justify-between mt-0.5">
+                  <span className="font-mono text-[9px] text-[var(--sx-text-dim)]">нижн.</span>
+                  <span className="font-mono text-[9px] text-[var(--sx-text-dim)]">верхн.</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-        <span className="font-mono text-[11px] text-[var(--sx-text-muted)]">Экспирация: {signal.expiry}</span>
-        <div className="flex items-center gap-1">
-          <Icon name="Target" size={11} className="text-[var(--sx-text-muted)]" />
-          <span className="font-mono text-[11px]" style={{ color: "var(--sx-green)" }}>
-            {signal.accuracy}%
-          </span>
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -253,7 +418,7 @@ function AnalyticsSection() {
       >
         <div className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider mb-4">Win Rate по активам</div>
         <div className="space-y-3">
-          {ASSETS.slice(0, 5).map((asset, i) => {
+          {ASSETS.slice(0, 5).map((asset) => {
             const rate = Math.floor(randomBetween(65, 93));
             return (
               <div key={asset} className="flex items-center gap-3">
@@ -270,6 +435,70 @@ function AnalyticsSection() {
                 <span className="font-mono text-xs w-8 text-right" style={{ color: "var(--sx-text-muted)" }}>
                   {rate}%
                 </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Support & Resistance levels по парам */}
+      <div
+        className="rounded-lg border p-4"
+        style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <span className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Уровни поддержки / сопротивления</span>
+          <span className="font-mono text-[10px] text-[var(--sx-text-dim)]">обновлено сейчас</span>
+        </div>
+        <div className="space-y-4">
+          {ASSETS.slice(0, 6).map((asset) => {
+            const lv = generateLevels(asset);
+            const range = lv.r2 - lv.s2;
+            const pricePct = range > 0 ? ((lv.price - lv.s2) / range) * 100 : 50;
+            return (
+              <div key={asset}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-mono text-xs text-[var(--sx-text)]">{asset}</span>
+                  <span className="font-mono text-xs tabular-nums text-[var(--sx-text-muted)]">{lv.price}</span>
+                </div>
+                {/* Шкала S2 — S1 — Price — R1 — R2 */}
+                <div className="relative h-5">
+                  <div className="absolute inset-y-0 left-0 right-0 flex items-center">
+                    <div className="w-full h-px" style={{ background: "var(--sx-border-light)" }} />
+                  </div>
+                  {/* S2 */}
+                  <div className="absolute top-0 h-full flex flex-col items-center" style={{ left: "0%" }}>
+                    <div className="w-px h-full" style={{ background: "var(--sx-green)", opacity: 0.5 }} />
+                  </div>
+                  {/* S1 */}
+                  <div className="absolute top-0 h-full flex flex-col items-center" style={{ left: "25%" }}>
+                    <div className="w-px h-full" style={{ background: "var(--sx-green)", opacity: 0.8 }} />
+                  </div>
+                  {/* R1 */}
+                  <div className="absolute top-0 h-full flex flex-col items-center" style={{ left: "75%" }}>
+                    <div className="w-px h-full" style={{ background: "var(--sx-red)", opacity: 0.8 }} />
+                  </div>
+                  {/* R2 */}
+                  <div className="absolute top-0 h-full flex flex-col items-center" style={{ left: "100%" }}>
+                    <div className="w-px h-full" style={{ background: "var(--sx-red)", opacity: 0.5 }} />
+                  </div>
+                  {/* Текущая цена — dot */}
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2 animate-pulse-dot"
+                    style={{
+                      left: `${Math.min(95, Math.max(5, pricePct))}%`,
+                      background: "var(--sx-bg)",
+                      borderColor: "var(--sx-text)",
+                    }}
+                  />
+                </div>
+                {/* Labels */}
+                <div className="flex justify-between mt-1">
+                  <span className="font-mono text-[9px]" style={{ color: "var(--sx-green)", opacity: 0.7 }}>S2 {lv.s2}</span>
+                  <span className="font-mono text-[9px]" style={{ color: "var(--sx-green)" }}>S1 {lv.s1}</span>
+                  <span className="font-mono text-[9px]" style={{ color: "var(--sx-red)" }}>R1 {lv.r1}</span>
+                  <span className="font-mono text-[9px]" style={{ color: "var(--sx-red)", opacity: 0.7 }}>R2 {lv.r2}</span>
+                </div>
               </div>
             );
           })}
