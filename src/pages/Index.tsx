@@ -526,6 +526,17 @@ export default function Index() {
   const [signals, setSignals] = useState(INITIAL_SIGNALS);
   const [time, setTime] = useState(new Date());
   const [newSignalPulse, setNewSignalPulse] = useState(false);
+  const [activePairs, setActivePairs] = useState<string[]>([]);
+
+  const togglePair = (pair: string) => {
+    setActivePairs((prev) =>
+      prev.includes(pair) ? prev.filter((p) => p !== pair) : [...prev, pair]
+    );
+  };
+
+  const filteredSignals = activePairs.length === 0
+    ? signals
+    : signals.filter((s) => activePairs.includes(s.asset));
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -607,7 +618,12 @@ export default function Index() {
             </h1>
             {activeTab === "signals" && (
               <div className="font-mono text-[11px] text-[var(--sx-text-muted)] mt-0.5">
-                Активных сигналов: <span style={{ color: "var(--sx-green)" }}>{signals.length}</span>
+                Активных сигналов: <span style={{ color: "var(--sx-green)" }}>{filteredSignals.length}</span>
+                {activePairs.length > 0 && (
+                  <span className="ml-1" style={{ color: "var(--sx-text-dim)" }}>
+                    · фильтр: {activePairs.length} пар
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -627,12 +643,63 @@ export default function Index() {
           )}
         </div>
 
+        {/* Filter bar */}
+        {activeTab === "signals" && (
+          <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-1 scrollbar-hide">
+            <button
+              onClick={() => setActivePairs([])}
+              className="shrink-0 px-3 py-1 rounded text-[11px] font-mono transition-all"
+              style={{
+                background: activePairs.length === 0 ? "var(--sx-green-dim)" : "var(--sx-border)",
+                color: activePairs.length === 0 ? "var(--sx-green)" : "var(--sx-text-muted)",
+                border: `1px solid ${activePairs.length === 0 ? "var(--sx-green)" : "var(--sx-border-light)"}`,
+              }}
+            >
+              Все
+            </button>
+            {ASSETS.map((pair) => {
+              const active = activePairs.includes(pair);
+              return (
+                <button
+                  key={pair}
+                  onClick={() => togglePair(pair)}
+                  className="shrink-0 px-3 py-1 rounded text-[11px] font-mono transition-all"
+                  style={{
+                    background: active ? "var(--sx-green-dim)" : "var(--sx-border)",
+                    color: active ? "var(--sx-green)" : "var(--sx-text-muted)",
+                    border: `1px solid ${active ? "var(--sx-green)" : "var(--sx-border-light)"}`,
+                  }}
+                >
+                  {pair}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Content */}
         {activeTab === "signals" && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {signals.map((s, i) => (
-              <SignalCard key={s.id} signal={s} index={i} />
-            ))}
+            {filteredSignals.length > 0 ? (
+              filteredSignals.map((s, i) => (
+                <SignalCard key={s.id} signal={s} index={i} />
+              ))
+            ) : (
+              <div
+                className="col-span-2 py-16 flex flex-col items-center gap-2 rounded-lg border"
+                style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
+              >
+                <Icon name="Search" size={24} className="text-[var(--sx-text-dim)]" />
+                <span className="font-mono text-sm text-[var(--sx-text-muted)]">Нет сигналов по выбранным парам</span>
+                <button
+                  onClick={() => setActivePairs([])}
+                  className="font-mono text-[11px] mt-1"
+                  style={{ color: "var(--sx-green)" }}
+                >
+                  Сбросить фильтр
+                </button>
+              </div>
+            )}
           </div>
         )}
         {activeTab === "analytics" && <AnalyticsSection />}
