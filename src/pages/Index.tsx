@@ -16,7 +16,7 @@ function generateSignal(id: number) {
   const tf = timeframes[Math.floor(Math.random() * timeframes.length)];
   const now = new Date();
   now.setMinutes(now.getMinutes() - Math.floor(Math.random() * 30));
-  const expiry = ["5 мин", "10 мин", "15 мин", "30 мин"][Math.floor(Math.random() * 4)];
+  const expiry = "3 мин";
   return { id, asset, direction, accuracy, tf, time: now, expiry, strength: Math.floor(randomBetween(60, 100)) };
 }
 
@@ -40,8 +40,19 @@ const ANALYTICS = [
   { label: "Активных пар", value: "8", delta: "", up: true },
 ];
 
-// Mini chart data
-const CHART_BARS = [65, 82, 71, 90, 68, 85, 77, 93, 70, 88, 63, 95, 80, 72, 87, 91, 76, 83, 88, 79];
+// Chart: последние 2 часа, точка каждые 5 минут (24 бара)
+function generateChartData() {
+  const now = new Date();
+  return Array.from({ length: 24 }, (_, i) => {
+    const t = new Date(now.getTime() - (23 - i) * 5 * 60 * 1000);
+    const accuracy = Math.floor(randomBetween(58, 97));
+    return {
+      accuracy,
+      label: t.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }),
+    };
+  });
+}
+const CHART_DATA = generateChartData();
 
 // Ticker
 const TICKER_ITEMS = [
@@ -170,34 +181,66 @@ function AnalyticsSection() {
         ))}
       </div>
 
-      {/* Chart */}
+      {/* Chart — последние 2 часа */}
       <div
         className="rounded-lg border p-4"
         style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
       >
-        <div className="flex items-center justify-between mb-4">
-          <span className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Точность за 20 сигналов</span>
-          <span className="font-mono text-xs text-[var(--sx-green)]">83% avg</span>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Точность за последние 2 часа</span>
+          <span className="font-mono text-xs" style={{ color: "var(--sx-green)" }}>
+            {Math.round(CHART_DATA.reduce((s, d) => s + d.accuracy, 0) / CHART_DATA.length)}% avg
+          </span>
         </div>
-        <div className="flex items-end gap-1 h-24">
-          {CHART_BARS.map((h, i) => (
-            <div
-              key={i}
-              className="flex-1 rounded-sm animate-chart-grow"
-              style={{
-                height: `${h}%`,
-                background: h >= 80 ? "var(--sx-green)" : h >= 70 ? "var(--sx-blue)" : "var(--sx-red)",
-                opacity: 0.8,
-                animationDelay: `${i * 30}ms`,
-                animationFillMode: "both",
-                transformOrigin: "bottom",
-              }}
-            />
+        <div className="font-mono text-[10px] text-[var(--sx-text-dim)] mb-4">
+          {CHART_DATA[0].label} — {CHART_DATA[CHART_DATA.length - 1].label} · шаг 5 мин
+        </div>
+
+        {/* Bars */}
+        <div className="flex items-end gap-0.5 h-28 mb-2">
+          {CHART_DATA.map((d, i) => (
+            <div key={i} className="flex-1 flex flex-col items-center gap-0.5 h-full justify-end group relative">
+              <div
+                className="w-full rounded-sm animate-chart-grow transition-opacity"
+                style={{
+                  height: `${d.accuracy}%`,
+                  background: d.accuracy >= 82 ? "var(--sx-green)" : d.accuracy >= 70 ? "var(--sx-blue)" : "var(--sx-red)",
+                  opacity: 0.85,
+                  animationDelay: `${i * 25}ms`,
+                  animationFillMode: "both",
+                  transformOrigin: "bottom",
+                }}
+              />
+              {/* Tooltip on hover */}
+              <div
+                className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 pointer-events-none z-10 px-1.5 py-0.5 rounded text-[9px] font-mono whitespace-nowrap transition-opacity"
+                style={{ background: "var(--sx-surface-2)", border: "1px solid var(--sx-border-light)", color: "var(--sx-text)" }}
+              >
+                {d.label}<br />{d.accuracy}%
+              </div>
+            </div>
           ))}
         </div>
-        <div className="flex justify-between mt-2">
-          <span className="font-mono text-[10px] text-[var(--sx-text-dim)]">-20 сигналов</span>
-          <span className="font-mono text-[10px] text-[var(--sx-text-dim)]">сейчас</span>
+
+        {/* Time axis — показываем каждую 6-ю метку */}
+        <div className="flex justify-between">
+          {CHART_DATA.filter((_, i) => i % 6 === 0 || i === CHART_DATA.length - 1).map((d, i) => (
+            <span key={i} className="font-mono text-[9px] text-[var(--sx-text-dim)]">{d.label}</span>
+          ))}
+        </div>
+
+        {/* Legend */}
+        <div className="flex items-center gap-4 mt-3 pt-3 border-t" style={{ borderColor: "var(--sx-border)" }}>
+          {[
+            { color: "var(--sx-green)", label: "≥82% — сильный" },
+            { color: "var(--sx-blue)", label: "70–81% — средний" },
+            { color: "var(--sx-red)", label: "<70% — слабый" },
+          ].map((l) => (
+            <div key={l.label} className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-sm" style={{ background: l.color }} />
+              <span className="font-mono text-[9px] text-[var(--sx-text-dim)]">{l.label}</span>
+            </div>
+          ))}
         </div>
       </div>
 
