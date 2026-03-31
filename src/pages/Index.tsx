@@ -1,142 +1,38 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Icon from "@/components/ui/icon";
 
-// --- Mock Data ---
+// ─── КОНСТАНТЫ ────────────────────────────────────────────────────────────────
+
 const ASSETS = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "USD/CHF", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY"];
 
-function randomBetween(min: number, max: number) {
-  return Math.random() * (max - min) + min;
-}
-
-// Базовые цены для генерации уровней
 const BASE_PRICES: Record<string, number> = {
   "EUR/USD": 1.0843, "GBP/USD": 1.2671, "USD/JPY": 149.82,
   "AUD/USD": 0.6514, "USD/CAD": 1.3628, "USD/CHF": 0.8972,
   "NZD/USD": 0.5983, "EUR/GBP": 0.8561, "EUR/JPY": 162.34, "GBP/JPY": 189.54,
 };
 
-function generateLevels(asset: string) {
-  const base = BASE_PRICES[asset] ?? 1.0;
-  const pip = base > 10 ? 0.1 : 0.001;
-  const price = +(base + randomBetween(-pip * 5, pip * 5)).toFixed(base > 10 ? 2 : 4);
-  const s1 = +(price - pip * Math.floor(randomBetween(8, 18))).toFixed(base > 10 ? 2 : 4);
-  const s2 = +(s1 - pip * Math.floor(randomBetween(8, 18))).toFixed(base > 10 ? 2 : 4);
-  const r1 = +(price + pip * Math.floor(randomBetween(8, 18))).toFixed(base > 10 ? 2 : 4);
-  const r2 = +(r1 + pip * Math.floor(randomBetween(8, 18))).toFixed(base > 10 ? 2 : 4);
-  return { price, s1, s2, r1, r2 };
+// Сессии форекс с приоритетными парами
+const SESSION_PAIRS: Record<string, string[]> = {
+  tokyo:  ["USD/JPY", "AUD/USD", "NZD/USD", "EUR/JPY", "GBP/JPY"],
+  london: ["EUR/USD", "GBP/USD", "EUR/GBP", "USD/CHF", "EUR/JPY"],
+  ny:     ["EUR/USD", "GBP/USD", "USD/CAD", "USD/CHF", "USD/JPY"],
+};
+
+// Свечные паттерны
+const BULLISH_PATTERNS = ["Молот", "Бычье поглощение", "Утренняя звезда", "Доджи разворот", "Пинбар вверх"];
+const BEARISH_PATTERNS = ["Повешенный", "Медвежье поглощение", "Вечерняя звезда", "Shooting Star", "Пинбар вниз"];
+
+// ─── УТИЛИТЫ ──────────────────────────────────────────────────────────────────
+
+function rnd(min: number, max: number) { return Math.random() * (max - min) + min; }
+function rndInt(min: number, max: number) { return Math.floor(rnd(min, max)); }
+
+function getCurrentSession(): string {
+  const h = new Date().getUTCHours();
+  if (h >= 0 && h < 9) return "tokyo";
+  if (h >= 7 && h < 16) return "london";
+  return "ny";
 }
-
-// Зоны близости к уровню (% от диапазона S2-R2)
-const ZONE_THRESHOLD = 0.12;
-
-type Levels = ReturnType<typeof generateLevels>;
-
-function detectZone(levels: Levels): { direction: "UP" | "DOWN"; reason: string; bonus: number } {
-  const { price, s1, s2, r1, r2 } = levels;
-  const range = r2 - s2;
-  if (range <= 0) return { direction: "UP", reason: "Нейтральная зона", bonus: 0 };
-
-  const distS1 = Math.abs(price - s1) / range;
-  const distS2 = Math.abs(price - s2) / range;
-  const distR1 = Math.abs(price - r1) / range;
-  const distR2 = Math.abs(price - r2) / range;
-
-  // Отскок от поддержки → UP
-  if (distS1 < ZONE_THRESHOLD) return { direction: "UP", reason: `Отскок от S1 (${s1})`, bonus: 8 };
-  if (distS2 < ZONE_THRESHOLD) return { direction: "UP", reason: `Отскок от S2 (${s2})`, bonus: 12 };
-  // Отскок от сопротивления → DOWN
-  if (distR1 < ZONE_THRESHOLD) return { direction: "DOWN", reason: `Отбой от R1 (${r1})`, bonus: 8 };
-  if (distR2 < ZONE_THRESHOLD) return { direction: "DOWN", reason: `Отбой от R2 (${r2})`, bonus: 12 };
-
-  // Цена в нижней половине → склонность UP, в верхней → DOWN
-  const mid = (s2 + r2) / 2;
-  if (price < mid) return { direction: "UP", reason: "Цена ниже середины диапазона", bonus: 3 };
-  return { direction: "DOWN", reason: "Цена выше середины диапазона", bonus: 3 };
-}
-
-function generateTA(direction: "UP" | "DOWN") {
-  // Стохастик %K и %D согласованы с направлением
-  // UP → перепроданность (< 20), DOWN → перекупленность (> 80)
-  const stochK = direction === "UP"
-    ? Math.floor(randomBetween(5, 22))
-    : Math.floor(randomBetween(78, 95));
-  const stochD = direction === "UP"
-    ? Math.floor(randomBetween(8, 25))
-    : Math.floor(randomBetween(75, 92));
-  const stochSignal = direction === "UP" ? "BUY" : "SELL";
-  return { stochK, stochD, stochSignal };
-}
-
-function generateSignal(id: number) {
-  const asset = ASSETS[Math.floor(Math.random() * ASSETS.length)];
-  const timeframes = ["1m", "5m", "15m", "30m", "1h"];
-  const tf = timeframes[Math.floor(Math.random() * timeframes.length)];
-  const now = new Date();
-  now.setMinutes(now.getMinutes() - Math.floor(Math.random() * 30));
-  const expiry = "3 мин";
-
-  // Уровни определяют направление
-  const levels = generateLevels(asset);
-  const zone = detectZone(levels);
-  const direction = zone.direction;
-
-  // Точность и сила усиливаются при близости к S/R
-  const baseAccuracy = Math.floor(randomBetween(80, 90));
-  const accuracy = Math.min(98, baseAccuracy + zone.bonus);
-  const baseStrength = Math.floor(randomBetween(78, 90));
-  const strength = Math.min(100, baseStrength + zone.bonus);
-
-  const ta = generateTA(direction);
-  return { id, asset, direction, accuracy, tf, time: now, expiry, strength, levels, ta, zoneReason: zone.reason };
-}
-
-function generateHistory(id: number) {
-  const asset = ASSETS[Math.floor(Math.random() * ASSETS.length)];
-  const direction = Math.random() > 0.5 ? "UP" : "DOWN";
-  const result = Math.random() > 0.35 ? "WIN" : "LOSS";
-  const profit = result === "WIN" ? `+${Math.floor(randomBetween(75, 95))}%` : `-100%`;
-  const date = new Date();
-  date.setHours(date.getHours() - id * 2 - Math.floor(Math.random() * 2));
-  return { id, asset, direction, result, profit, date };
-}
-
-const INITIAL_SIGNALS = Array.from({ length: 8 }, (_, i) => generateSignal(i + 1));
-const HISTORY = Array.from({ length: 20 }, (_, i) => generateHistory(i + 1));
-
-const ANALYTICS = [
-  { label: "Точность сигналов", value: "83%", delta: "+2.4%", up: true },
-  { label: "Сигналов сегодня", value: "47", delta: "+12", up: true },
-  { label: "WIN Rate (7д)", value: "78%", delta: "-1.2%", up: false },
-  { label: "Активных пар", value: "10", delta: "", up: true },
-];
-
-// Chart: последний 1 час, точка каждые 5 минут (12 баров)
-function generateChartData() {
-  const now = new Date();
-  return Array.from({ length: 12 }, (_, i) => {
-    const t = new Date(now.getTime() - (11 - i) * 5 * 60 * 1000);
-    const accuracy = Math.floor(randomBetween(78, 98));
-    return {
-      accuracy,
-      label: t.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }),
-    };
-  });
-}
-const CHART_DATA = generateChartData();
-
-// Ticker
-const TICKER_ITEMS = [
-  { pair: "EUR/USD", price: "1.08432", delta: "+0.12%" },
-  { pair: "GBP/USD", price: "1.26710", delta: "-0.08%" },
-  { pair: "USD/JPY", price: "149.820", delta: "+0.31%" },
-  { pair: "AUD/USD", price: "0.65140", delta: "-0.15%" },
-  { pair: "USD/CAD", price: "1.36280", delta: "+0.07%" },
-  { pair: "USD/CHF", price: "0.89720", delta: "-0.03%" },
-  { pair: "NZD/USD", price: "0.59830", delta: "+0.18%" },
-  { pair: "EUR/GBP", price: "0.85610", delta: "+0.05%" },
-  { pair: "EUR/JPY", price: "162.340", delta: "+0.43%" },
-  { pair: "GBP/JPY", price: "189.540", delta: "+0.22%" },
-];
 
 function formatTime(date: Date) {
   return date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
@@ -145,7 +41,233 @@ function formatDateTime(date: Date) {
   return date.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-// --- Components ---
+// ─── ГЕНЕРАЦИЯ УРОВНЕЙ ────────────────────────────────────────────────────────
+
+function generateLevels(asset: string) {
+  const base = BASE_PRICES[asset] ?? 1.0;
+  const isJpy = base > 10;
+  const pip = isJpy ? 0.1 : 0.001;
+  const dec = isJpy ? 2 : 4;
+
+  // Цена слегка блуждает от базы
+  const price = +(base + rnd(-pip * 8, pip * 8)).toFixed(dec);
+
+  // Уровни основаны на реальных расстояниях (пипсы)
+  const s1dist = rndInt(12, 22);
+  const s2dist = rndInt(18, 35);
+  const r1dist = rndInt(12, 22);
+  const r2dist = rndInt(18, 35);
+
+  const s1 = +(price - pip * s1dist).toFixed(dec);
+  const s2 = +(price - pip * (s1dist + s2dist)).toFixed(dec);
+  const r1 = +(price + pip * r1dist).toFixed(dec);
+  const r2 = +(price + pip * (r1dist + r2dist)).toFixed(dec);
+
+  // Пивот-точка (классическая формула P = (H+L+C)/3)
+  const high = +(price + pip * rndInt(5, 15)).toFixed(dec);
+  const low  = +(price - pip * rndInt(5, 15)).toFixed(dec);
+  const pivot = +((high + low + price) / 3).toFixed(dec);
+
+  return { price, s1, s2, r1, r2, pivot, high, low };
+}
+
+// ─── ОПРЕДЕЛЕНИЕ ЗОНЫ ────────────────────────────────────────────────────────
+
+type Levels = ReturnType<typeof generateLevels>;
+
+interface ZoneResult {
+  direction: "UP" | "DOWN";
+  reason: string;
+  confidence: number; // 0-100
+  zoneType: "S2" | "S1" | "PIVOT_SUPPORT" | "MID" | "PIVOT_RESIST" | "R1" | "R2";
+}
+
+function detectZone(levels: Levels): ZoneResult {
+  const { price, s1, s2, r1, r2, pivot } = levels;
+  const range = r2 - s2;
+  if (range <= 0) return { direction: "UP", reason: "Нейтральная зона", confidence: 70, zoneType: "MID" };
+
+  const pct = (v: number) => Math.abs(price - v) / range;
+
+  if (pct(s2) < 0.08) return { direction: "UP", reason: `Отскок от S2 — сильная поддержка`, confidence: 95, zoneType: "S2" };
+  if (pct(s1) < 0.10) return { direction: "UP", reason: `Отскок от S1 — поддержка`, confidence: 88, zoneType: "S1" };
+  if (price < pivot && pct(pivot) < 0.12) return { direction: "UP", reason: `Цена у пивота снизу`, confidence: 82, zoneType: "PIVOT_SUPPORT" };
+  if (pct(r2) < 0.08) return { direction: "DOWN", reason: `Отбой от R2 — сильное сопротивление`, confidence: 95, zoneType: "R2" };
+  if (pct(r1) < 0.10) return { direction: "DOWN", reason: `Отбой от R1 — сопротивление`, confidence: 88, zoneType: "R1" };
+  if (price > pivot && pct(pivot) < 0.12) return { direction: "DOWN", reason: `Цена у пивота сверху`, confidence: 82, zoneType: "PIVOT_RESIST" };
+
+  // Середина — слабый сигнал
+  const mid = (s2 + r2) / 2;
+  return price < mid
+    ? { direction: "UP", reason: "Цена в нижней части диапазона", confidence: 74, zoneType: "MID" }
+    : { direction: "DOWN", reason: "Цена в верхней части диапазона", confidence: 74, zoneType: "MID" };
+}
+
+// ─── ТЕХНИЧЕСКИЙ АНАЛИЗ ───────────────────────────────────────────────────────
+
+interface TAResult {
+  // Стохастик
+  stochK: number;
+  stochD: number;
+  stochStatus: string;
+  // RSI
+  rsi: number;
+  rsiStatus: string;
+  // Тренд (EMA)
+  trend: "UP" | "DOWN" | "FLAT";
+  trendStrength: number; // 0-100
+  // ATR (волатильность)
+  atr: number;
+  atrLabel: string;
+  // Свечной паттерн
+  pattern: string;
+  // Кол-во подтверждений из 4
+  confirmations: number;
+  confirmationList: { label: string; ok: boolean }[];
+}
+
+function generateTA(direction: "UP" | "DOWN", zone: ZoneResult): TAResult {
+  const isUp = direction === "UP";
+
+  // Стохастик: перепроданность при UP, перекупленность при DOWN
+  const stochK = isUp ? rndInt(4, 19) : rndInt(81, 96);
+  const stochD = isUp ? rndInt(6, 22) : rndInt(78, 93);
+  const stochStatus = isUp ? "Перепроданность" : "Перекупленность";
+
+  // RSI согласован
+  const rsi = isUp ? rndInt(24, 38) : rndInt(62, 76);
+  const rsiStatus = isUp ? "Зона перепроданности" : "Зона перекупленности";
+
+  // Тренд EMA
+  const trend = isUp ? (Math.random() > 0.4 ? "DOWN" : "FLAT") : (Math.random() > 0.4 ? "UP" : "FLAT");
+  const trendStrength = rndInt(45, 80);
+
+  // ATR (средний истинный диапазон) — волатильность
+  const atrRaw = rnd(0.0008, 0.0035);
+  const atr = +atrRaw.toFixed(4);
+  const atrLabel = atr < 0.001 ? "Низкая" : atr < 0.002 ? "Средняя" : "Высокая";
+
+  // Паттерн
+  const pattern = isUp
+    ? BULLISH_PATTERNS[rndInt(0, BULLISH_PATTERNS.length)]
+    : BEARISH_PATTERNS[rndInt(0, BEARISH_PATTERNS.length)];
+
+  // Подтверждения
+  const zoneOk = zone.confidence >= 82;
+  const stochOk = true; // всегда согласован
+  const rsiOk = true;   // всегда согласован
+  const trendOk = (isUp && trend === "DOWN") || (!isUp && trend === "UP"); // контртренд с разворотом
+  const confirmations = [zoneOk, stochOk, rsiOk, trendOk].filter(Boolean).length;
+
+  const confirmationList = [
+    { label: `Уровень S/R (${zone.zoneType})`, ok: zoneOk },
+    { label: `Стохастик ${stochK}/${stochD}`, ok: stochOk },
+    { label: `RSI ${rsi}`, ok: rsiOk },
+    { label: `Паттерн: ${pattern}`, ok: true },
+  ];
+
+  return { stochK, stochD, stochStatus, rsi, rsiStatus, trend, trendStrength, atr, atrLabel, pattern, confirmations, confirmationList };
+}
+
+// ─── ГЕНЕРАЦИЯ СИГНАЛА ────────────────────────────────────────────────────────
+
+function generateSignal(id: number) {
+  const session = getCurrentSession();
+  const priorityPairs = SESSION_PAIRS[session];
+  // 70% вероятность взять пару из активной сессии
+  const asset = Math.random() < 0.7
+    ? priorityPairs[rndInt(0, priorityPairs.length)]
+    : ASSETS[rndInt(0, ASSETS.length)];
+
+  const tf = ["1m", "5m", "15m"][rndInt(0, 3)]; // только короткие TF для 3-мин экспирации
+  const now = new Date();
+  now.setSeconds(now.getSeconds() - rndInt(10, 90));
+
+  const levels = generateLevels(asset);
+  const zone = detectZone(levels);
+  const direction = zone.direction;
+  const ta = generateTA(direction, zone);
+
+  // Точность = базовая + бонус от зоны + бонус от подтверждений
+  const baseAcc = rndInt(74, 84);
+  const zoneBonus = zone.confidence >= 95 ? 10 : zone.confidence >= 88 ? 6 : 2;
+  const confirmBonus = ta.confirmations * 2;
+  const accuracy = Math.min(97, baseAcc + zoneBonus + confirmBonus);
+
+  // Качество сигнала
+  const quality: "A+" | "A" | "B" = accuracy >= 92 ? "A+" : accuracy >= 85 ? "A" : "B";
+
+  return {
+    id, asset, direction, accuracy, tf,
+    time: now, expiry: "3 мин",
+    strength: Math.min(100, accuracy + rndInt(-3, 3)),
+    levels, ta, zone,
+    zoneReason: zone.reason,
+    quality,
+    session,
+  };
+}
+
+// ─── ИСТОРИЯ ──────────────────────────────────────────────────────────────────
+
+function generateHistory(id: number) {
+  const asset = ASSETS[rndInt(0, ASSETS.length)];
+  const direction: "UP" | "DOWN" = Math.random() > 0.5 ? "UP" : "DOWN";
+  // Высокая точность → больше WIN
+  const winRate = 0.78;
+  const result = Math.random() < winRate ? "WIN" : "LOSS";
+  const profit = result === "WIN" ? `+${rndInt(78, 94)}%` : `-100%`;
+  const date = new Date();
+  date.setMinutes(date.getMinutes() - id * 18 - rndInt(0, 15));
+  const accuracy = rndInt(82, 97);
+  const tf = ["1m", "5m", "15m"][rndInt(0, 3)];
+  return { id, asset, direction, result, profit, date, accuracy, tf };
+}
+
+const INITIAL_SIGNALS = Array.from({ length: 9 }, (_, i) => generateSignal(i + 1));
+const INITIAL_HISTORY = Array.from({ length: 30 }, (_, i) => generateHistory(i + 1));
+
+// ─── CHART DATA ───────────────────────────────────────────────────────────────
+
+function generateChartData() {
+  const now = new Date();
+  // 12 точек × 5 мин = 1 час, реалистичный тренд
+  const vals: number[] = [];
+  let v = rndInt(75, 82);
+  for (let i = 0; i < 12; i++) {
+    v = Math.max(60, Math.min(98, v + rndInt(-6, 8)));
+    vals.push(v);
+  }
+  return vals.map((accuracy, i) => ({
+    accuracy,
+    label: new Date(now.getTime() - (11 - i) * 5 * 60 * 1000)
+      .toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }),
+  }));
+}
+const CHART_DATA = generateChartData();
+
+// ─── TICKER ───────────────────────────────────────────────────────────────────
+
+const TICKER_ITEMS = [
+  { pair: "EUR/USD", price: "1.0843", delta: "+0.12%" },
+  { pair: "GBP/USD", price: "1.2671", delta: "-0.08%" },
+  { pair: "USD/JPY", price: "149.82", delta: "+0.31%" },
+  { pair: "AUD/USD", price: "0.6514", delta: "-0.15%" },
+  { pair: "USD/CAD", price: "1.3628", delta: "+0.07%" },
+  { pair: "USD/CHF", price: "0.8972", delta: "-0.03%" },
+  { pair: "NZD/USD", price: "0.5983", delta: "+0.18%" },
+  { pair: "EUR/GBP", price: "0.8561", delta: "+0.05%" },
+  { pair: "EUR/JPY", price: "162.34", delta: "+0.43%" },
+  { pair: "GBP/JPY", price: "189.54", delta: "+0.22%" },
+];
+
+// ─── SESSION LABEL ────────────────────────────────────────────────────────────
+
+const SESSION_LABEL: Record<string, string> = { tokyo: "Токио", london: "Лондон", ny: "Нью-Йорк" };
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// КОМПОНЕНТЫ
+// ═══════════════════════════════════════════════════════════════════════════════
 
 function LiveDot() {
   return (
@@ -156,211 +278,280 @@ function LiveDot() {
   );
 }
 
+function QualityBadge({ q }: { q: "A+" | "A" | "B" }) {
+  const cfg = {
+    "A+": { bg: "var(--sx-green-dim)", color: "var(--sx-green)", border: "var(--sx-green)" },
+    "A":  { bg: "var(--sx-blue-dim)",  color: "var(--sx-blue)",  border: "var(--sx-blue)" },
+    "B":  { bg: "var(--sx-border)",    color: "var(--sx-text-muted)", border: "var(--sx-border-light)" },
+  }[q];
+  return (
+    <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded border" style={cfg}>
+      {q}
+    </span>
+  );
+}
 
-function SignalCard({ signal, index }: { signal: ReturnType<typeof generateSignal>; index: number }) {
+function ConfirmationDots({ count, total = 4 }: { count: number; total?: number }) {
+  return (
+    <div className="flex gap-1">
+      {Array.from({ length: total }, (_, i) => (
+        <span
+          key={i}
+          className="w-1.5 h-1.5 rounded-full"
+          style={{ background: i < count ? "var(--sx-green)" : "var(--sx-border-light)" }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function StochBar({ k, d, isUp }: { k: number; d: number; isUp: boolean }) {
+  const kColor = k < 20 ? "var(--sx-green)" : k > 80 ? "var(--sx-red)" : "var(--sx-blue)";
+  const dColor = d < 20 ? "var(--sx-green)" : d > 80 ? "var(--sx-red)" : "var(--sx-text-muted)";
+  return (
+    <div className="space-y-2">
+      {[{ label: "%K", val: k, color: kColor, size: "w-2.5 h-2.5" }, { label: "%D", val: d, color: dColor, size: "w-2 h-2" }].map(({ label, val, color, size }) => (
+        <div key={label}>
+          <div className="flex justify-between mb-1">
+            <span className="font-mono text-[10px] text-[var(--sx-text-muted)]">{label}</span>
+            <span className="font-mono text-[10px] tabular-nums" style={{ color }}>{val}</span>
+          </div>
+          <div className="relative h-2 rounded-full" style={{ background: "var(--sx-border)" }}>
+            <div className="absolute top-0 left-0 h-full rounded-l-full opacity-30" style={{ width: "20%", background: "var(--sx-green)" }} />
+            <div className="absolute top-0 right-0 h-full rounded-r-full opacity-30" style={{ width: "20%", background: "var(--sx-red)" }} />
+            <div
+              className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full border-2 ${size}`}
+              style={{ left: `${val}%`, background: "var(--sx-bg)", borderColor: color }}
+            />
+          </div>
+        </div>
+      ))}
+      <div className="flex justify-between text-[9px] font-mono">
+        <span style={{ color: "var(--sx-green)" }}>0 — перепроданность</span>
+        <span style={{ color: "var(--sx-red)" }}>100 — перекупленность</span>
+      </div>
+      {/* Сигнал пересечения */}
+      <div
+        className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-mono"
+        style={{
+          background: isUp ? "var(--sx-green-dim)" : "var(--sx-red-dim)",
+          color: isUp ? "var(--sx-green)" : "var(--sx-red)",
+        }}
+      >
+        <Icon name={isUp ? "ArrowUpRight" : "ArrowDownRight"} size={11} />
+        {isUp ? `%K (${k}) пересёк %D (${d}) снизу — сигнал покупки` : `%K (${k}) пересёк %D (${d}) сверху — сигнал продажи`}
+      </div>
+    </div>
+  );
+}
+
+function LevelsChart({ levels, isUp }: { levels: Levels; isUp: boolean }) {
+  const { price, s1, s2, r1, r2, pivot } = levels;
+  const max = r2, min = s2;
+  const range = max - min || 1;
+  const pct = (v: number) => ((v - min) / range) * 100;
+
+  const rows = [
+    { label: "R2", val: r2, color: "var(--sx-red)", op: "0.6" },
+    { label: "R1", val: r1, color: "var(--sx-red)", op: "1" },
+    { label: "PP", val: pivot, color: "var(--sx-yellow)", op: "1" },
+    { label: "S1", val: s1, color: "var(--sx-green)", op: "1" },
+    { label: "S2", val: s2, color: "var(--sx-green)", op: "0.6" },
+  ];
+
+  return (
+    <div>
+      {/* Вертикальная шкала */}
+      <div className="relative h-28 mb-3">
+        <div className="absolute left-8 right-0 top-0 bottom-0">
+          {/* Фоновые полосы */}
+          <div className="absolute inset-0 rounded" style={{ background: "var(--sx-surface-2)" }} />
+
+          {rows.map(({ label, val, color, op }) => {
+            const pos = 100 - pct(val);
+            return (
+              <div key={label} className="absolute left-0 right-0 flex items-center" style={{ top: `${pos}%` }}>
+                <div className="flex-1 border-t border-dashed" style={{ borderColor: color, opacity: parseFloat(op) * 0.5 }} />
+              </div>
+            );
+          })}
+
+          {/* Текущая цена */}
+          <div
+            className="absolute left-0 right-0 flex items-center gap-1 z-10"
+            style={{ top: `${100 - pct(price)}%`, transform: "translateY(-50%)" }}
+          >
+            <div className="flex-1 border-t-2" style={{ borderColor: "var(--sx-text)" }} />
+            <span className="font-mono text-[9px] px-1 py-0.5 rounded tabular-nums"
+              style={{ background: isUp ? "var(--sx-green)" : "var(--sx-red)", color: "#000", fontSize: "9px" }}>
+              {price}
+            </span>
+          </div>
+        </div>
+
+        {/* Лейблы слева */}
+        <div className="absolute left-0 top-0 bottom-0 flex flex-col justify-between">
+          {rows.map(({ label, color, op }) => (
+            <span key={label} className="font-mono text-[9px] w-7" style={{ color, opacity: parseFloat(op) }}>{label}</span>
+          ))}
+        </div>
+      </div>
+
+      {/* Числа */}
+      <div className="grid grid-cols-5 gap-1 text-center">
+        {rows.map(({ label, val, color, op }) => (
+          <div key={label}>
+            <div className="font-mono text-[9px]" style={{ color, opacity: parseFloat(op) }}>{label}</div>
+            <div className="font-mono text-[9px] tabular-nums text-[var(--sx-text-muted)]">{val}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── КАРТОЧКА СИГНАЛА ────────────────────────────────────────────────────────
+
+type Signal = ReturnType<typeof generateSignal>;
+
+function SignalCard({ signal, index }: { signal: Signal; index: number }) {
   const isUp = signal.direction === "UP";
   const [expanded, setExpanded] = useState(false);
-  const { levels, ta, zoneReason } = signal;
+  const { levels, ta, zone } = signal;
 
   return (
     <div
       className="animate-fade-in rounded-lg border flex flex-col transition-all"
       style={{
         background: "var(--sx-surface)",
-        borderColor: expanded ? "var(--sx-border-light)" : "var(--sx-border)",
-        animationDelay: `${index * 60}ms`,
+        borderColor: expanded ? (isUp ? "var(--sx-green)" : "var(--sx-red)") : "var(--sx-border)",
+        animationDelay: `${index * 50}ms`,
         animationFillMode: "both",
         opacity: 0,
+        borderWidth: expanded ? "1px" : "1px",
       }}
     >
-      {/* Main content */}
       <div className="p-4 flex flex-col gap-3">
+
+        {/* Шапка */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="font-mono font-semibold text-sm text-[var(--sx-text)]">{signal.asset}</span>
-            <span
-              className="text-[10px] px-1.5 py-0.5 rounded font-mono font-medium"
-              style={{ background: "var(--sx-border)", color: "var(--sx-text-muted)" }}
-            >
+            <span className="font-mono font-bold text-sm text-[var(--sx-text)]">{signal.asset}</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ background: "var(--sx-border)", color: "var(--sx-text-muted)" }}>
               {signal.tf}
             </span>
+            <QualityBadge q={signal.quality} />
           </div>
-          <span
-            className={`text-xs px-2 py-0.5 rounded font-mono font-semibold flex items-center gap-1 ${isUp ? "signal-badge-up" : "signal-badge-down"}`}
-          >
+          <span className={`text-xs px-2.5 py-1 rounded font-mono font-bold flex items-center gap-1 ${isUp ? "signal-badge-up" : "signal-badge-down"}`}>
             {isUp ? "▲" : "▼"} {signal.direction}
           </span>
         </div>
 
-        {/* Zone reason */}
-        <div
-          className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-mono"
-          style={{
-            background: isUp ? "var(--sx-green-dim)" : "var(--sx-red-dim)",
-            color: isUp ? "var(--sx-green)" : "var(--sx-red)",
-          }}
-        >
-          <Icon name={isUp ? "TrendingUp" : "TrendingDown"} size={10} />
-          {zoneReason}
-        </div>
-
-        {/* Strength bar */}
-        <div>
-          <div className="flex justify-between items-center mb-1">
-            <span className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Сила сигнала</span>
-            <span className="text-[10px] font-mono" style={{ color: isUp ? "var(--sx-green)" : "var(--sx-red)" }}>
-              {signal.strength}%
-            </span>
+        {/* Причина + подтверждения */}
+        <div className="flex items-center justify-between">
+          <div
+            className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-mono flex-1 mr-2"
+            style={{ background: isUp ? "var(--sx-green-dim)" : "var(--sx-red-dim)", color: isUp ? "var(--sx-green)" : "var(--sx-red)" }}
+          >
+            <Icon name={isUp ? "TrendingUp" : "TrendingDown"} size={10} />
+            <span className="truncate">{signal.zoneReason}</span>
           </div>
-          <div className="h-1 rounded-full" style={{ background: "var(--sx-border)" }}>
-            <div
-              className="h-1 rounded-full transition-all"
-              style={{ width: `${signal.strength}%`, background: isUp ? "var(--sx-green)" : "var(--sx-red)" }}
-            />
+          <div className="flex flex-col items-end gap-0.5">
+            <ConfirmationDots count={ta.confirmations} />
+            <span className="font-mono text-[9px] text-[var(--sx-text-dim)]">{ta.confirmations}/4 факт.</span>
           </div>
         </div>
 
+        {/* Точность + паттерн */}
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="font-mono text-[10px] text-[var(--sx-text-muted)] mb-1">Точность</div>
+            <div className="flex items-center gap-2">
+              <div className="w-24 h-1.5 rounded-full" style={{ background: "var(--sx-border)" }}>
+                <div className="h-1.5 rounded-full" style={{ width: `${signal.accuracy}%`, background: isUp ? "var(--sx-green)" : "var(--sx-red)" }} />
+              </div>
+              <span className="font-mono text-sm font-bold" style={{ color: isUp ? "var(--sx-green)" : "var(--sx-red)" }}>
+                {signal.accuracy}%
+              </span>
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="font-mono text-[10px] text-[var(--sx-text-muted)] mb-1">Паттерн</div>
+            <div className="font-mono text-[10px] text-[var(--sx-text)]">{ta.pattern}</div>
+          </div>
+        </div>
+
+        {/* Нижняя строка */}
         <div className="flex items-center justify-between pt-1 border-t" style={{ borderColor: "var(--sx-border)" }}>
           <div className="flex items-center gap-1 text-[var(--sx-text-muted)]">
             <Icon name="Clock" size={11} />
             <span className="font-mono text-[11px]">{formatTime(signal.time)}</span>
           </div>
-          <span className="font-mono text-[11px] text-[var(--sx-text-muted)]">Экспирация: {signal.expiry}</span>
-          <div className="flex items-center gap-1">
-            <Icon name="Target" size={11} className="text-[var(--sx-text-muted)]" />
-            <span className="font-mono text-[11px]" style={{ color: "var(--sx-green)" }}>
-              {signal.accuracy}%
-            </span>
+          <div className="flex items-center gap-1 text-[var(--sx-text-muted)]">
+            <Icon name="Globe" size={11} />
+            <span className="font-mono text-[11px]">{SESSION_LABEL[signal.session]}</span>
+          </div>
+          <span className="font-mono text-[11px] text-[var(--sx-text-muted)]">Экс.: {signal.expiry}</span>
+          <div className="flex items-center gap-1 text-[var(--sx-text-muted)]">
+            <Icon name="Activity" size={11} />
+            <span className="font-mono text-[11px]">ATR {ta.atrLabel}</span>
           </div>
         </div>
       </div>
 
-      {/* Expand toggle */}
+      {/* Кнопка раскрытия */}
       <button
-        onClick={() => setExpanded((v) => !v)}
-        className="flex items-center justify-center gap-1 py-1.5 border-t text-[10px] font-mono transition-colors hover:bg-[var(--sx-surface-2)]"
-        style={{ borderColor: "var(--sx-border)", color: "var(--sx-text-dim)" }}
+        onClick={() => setExpanded(v => !v)}
+        className="flex items-center justify-center gap-1.5 py-2 border-t text-[10px] font-mono transition-colors hover:bg-[var(--sx-surface-2)]"
+        style={{ borderColor: "var(--sx-border)", color: expanded ? (isUp ? "var(--sx-green)" : "var(--sx-red)") : "var(--sx-text-dim)" }}
       >
         <Icon name={expanded ? "ChevronUp" : "ChevronDown"} size={11} />
-        {expanded ? "Скрыть анализ" : "Технический анализ"}
+        {expanded ? "Скрыть анализ" : "Уровни и стохастик"}
       </button>
 
-      {/* Expanded: TA + Levels */}
+      {/* Раскрытая секция */}
       {expanded && (
-        <div className="px-4 pb-4 flex flex-col gap-3 animate-fade-in border-t" style={{ borderColor: "var(--sx-border)" }}>
+        <div className="px-4 pb-4 space-y-4 animate-fade-in">
 
-          {/* Levels */}
+          {/* Уровни S/R */}
           <div className="pt-3">
-            <div className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider mb-2">Уровни S/R</div>
-            <div className="relative">
-              {/* Визуальная шкала уровней */}
-              <div className="flex flex-col gap-1">
-                {[
-                  { label: "R2", val: levels.r2, color: "var(--sx-red)" },
-                  { label: "R1", val: levels.r1, color: "var(--sx-red)", opacity: "0.7" },
-                  { label: "Цена", val: levels.price, color: "var(--sx-text)", isCurrent: true },
-                  { label: "S1", val: levels.s1, color: "var(--sx-green)", opacity: "0.7" },
-                  { label: "S2", val: levels.s2, color: "var(--sx-green)" },
-                ].map((l) => (
-                  <div key={l.label} className="flex items-center gap-2">
-                    <span className="font-mono text-[10px] w-7 text-right" style={{ color: l.color, opacity: l.opacity ?? 1 }}>
-                      {l.label}
-                    </span>
-                    <div className="flex-1 flex items-center gap-1">
-                      <div
-                        className="h-px flex-1"
-                        style={{
-                          background: l.isCurrent ? "var(--sx-text-muted)" : l.color,
-                          opacity: l.isCurrent ? 1 : 0.5,
-                          height: l.isCurrent ? "2px" : "1px",
-                        }}
-                      />
-                    </div>
-                    <span
-                      className="font-mono text-[10px] tabular-nums"
-                      style={{ color: l.isCurrent ? "var(--sx-text)" : l.color, opacity: l.opacity ?? 1, fontWeight: l.isCurrent ? 600 : 400 }}
-                    >
-                      {l.val}
-                    </span>
-                    {l.isCurrent && (
-                      <span className="w-1.5 h-1.5 rounded-full animate-pulse-dot" style={{ background: "var(--sx-text-muted)" }} />
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Stochastic */}
-          <div className="border-t pt-3" style={{ borderColor: "var(--sx-border)" }}>
             <div className="flex items-center justify-between mb-3">
-              <span className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Стохастик (14,3,3)</span>
-              <span
-                className="font-mono text-[9px] px-1.5 py-0.5 rounded"
-                style={{
-                  background: ta.stochSignal === "BUY" ? "var(--sx-green-dim)" : "var(--sx-red-dim)",
-                  color: ta.stochSignal === "BUY" ? "var(--sx-green)" : "var(--sx-red)",
-                }}
-              >
-                {ta.stochSignal}
+              <span className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Уровни S/R + Пивот</span>
+              <span className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{
+                background: zone.confidence >= 90 ? "var(--sx-green-dim)" : "var(--sx-blue-dim)",
+                color: zone.confidence >= 90 ? "var(--sx-green)" : "var(--sx-blue)",
+              }}>
+                Зона {zone.confidence}%
               </span>
             </div>
+            <LevelsChart levels={levels} isUp={isUp} />
+          </div>
 
-            {/* %K line */}
-            <div className="space-y-2">
-              <div>
-                <div className="flex justify-between mb-1">
-                  <span className="font-mono text-[10px] text-[var(--sx-text-muted)]">%K (быстрый)</span>
-                  <span className="font-mono text-[10px] tabular-nums" style={{
-                    color: ta.stochK < 20 ? "var(--sx-green)" : ta.stochK > 80 ? "var(--sx-red)" : "var(--sx-text-muted)"
-                  }}>{ta.stochK}</span>
-                </div>
-                <div className="relative h-2 rounded-full" style={{ background: "var(--sx-border)" }}>
-                  {/* Зоны */}
-                  <div className="absolute top-0 left-0 h-full rounded-l-full" style={{ width: "20%", background: "var(--sx-green-dim)" }} />
-                  <div className="absolute top-0 right-0 h-full rounded-r-full" style={{ width: "20%", background: "var(--sx-red-dim)" }} />
-                  {/* Указатель %K */}
-                  <div
-                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2 z-10"
-                    style={{
-                      left: `${ta.stochK}%`,
-                      background: "var(--sx-bg)",
-                      borderColor: ta.stochK < 20 ? "var(--sx-green)" : ta.stochK > 80 ? "var(--sx-red)" : "var(--sx-blue)",
-                    }}
-                  />
-                </div>
-              </div>
+          {/* Стохастик */}
+          <div className="border-t pt-4" style={{ borderColor: "var(--sx-border)" }}>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Стохастик (14, 3, 3)</span>
+              <span className="font-mono text-[9px] text-[var(--sx-text-dim)]">{ta.stochStatus}</span>
+            </div>
+            <StochBar k={ta.stochK} d={ta.stochD} isUp={isUp} />
+          </div>
 
-              {/* %D line */}
-              <div>
-                <div className="flex justify-between mb-1">
-                  <span className="font-mono text-[10px] text-[var(--sx-text-muted)]">%D (сигнальный)</span>
-                  <span className="font-mono text-[10px] tabular-nums" style={{
-                    color: ta.stochD < 20 ? "var(--sx-green)" : ta.stochD > 80 ? "var(--sx-red)" : "var(--sx-text-muted)"
-                  }}>{ta.stochD}</span>
+          {/* Все подтверждения */}
+          <div className="border-t pt-4" style={{ borderColor: "var(--sx-border)" }}>
+            <div className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider mb-2">
+              Подтверждения ({ta.confirmations}/4)
+            </div>
+            <div className="space-y-1.5">
+              {ta.confirmationList.map((c) => (
+                <div key={c.label} className="flex items-center gap-2">
+                  <span className="w-3.5 h-3.5 rounded-full flex items-center justify-center shrink-0" style={{
+                    background: c.ok ? "var(--sx-green-dim)" : "var(--sx-red-dim)"
+                  }}>
+                    <Icon name={c.ok ? "Check" : "X"} size={8} style={{ color: c.ok ? "var(--sx-green)" : "var(--sx-red)" }} />
+                  </span>
+                  <span className="font-mono text-[10px] text-[var(--sx-text-muted)]">{c.label}</span>
                 </div>
-                <div className="relative h-2 rounded-full" style={{ background: "var(--sx-border)" }}>
-                  <div className="absolute top-0 left-0 h-full rounded-l-full" style={{ width: "20%", background: "var(--sx-green-dim)" }} />
-                  <div className="absolute top-0 right-0 h-full rounded-r-full" style={{ width: "20%", background: "var(--sx-red-dim)" }} />
-                  <div
-                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2 h-2 rounded-full z-10"
-                    style={{
-                      left: `${ta.stochD}%`,
-                      background: ta.stochD < 20 ? "var(--sx-green)" : ta.stochD > 80 ? "var(--sx-red)" : "var(--sx-blue)",
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Пересечение */}
-              <div className="flex items-center justify-between pt-1">
-                <span className="font-mono text-[10px] text-[var(--sx-text-muted)]">
-                  {ta.stochK < 20 ? "Зона перепроданности — сигнал покупки" : "Зона перекупленности — сигнал продажи"}
-                </span>
-                <span className="font-mono text-[9px] text-[var(--sx-text-dim)]">
-                  {ta.stochK > ta.stochD ? "%K > %D ▲" : "%K < %D ▼"}
-                </span>
-              </div>
+              ))}
             </div>
           </div>
         </div>
@@ -369,185 +560,161 @@ function SignalCard({ signal, index }: { signal: ReturnType<typeof generateSigna
   );
 }
 
-function AnalyticsSection() {
+// ─── АНАЛИТИКА ────────────────────────────────────────────────────────────────
+
+function AnalyticsSection({ history }: { history: ReturnType<typeof generateHistory>[] }) {
+  const wins = history.filter(h => h.result === "WIN").length;
+  const total = history.length;
+  const winRate = Math.round((wins / total) * 100);
+  const avgAccuracy = Math.round(history.reduce((s, h) => s + h.accuracy, 0) / total);
+  const chartAvg = Math.round(CHART_DATA.reduce((s, d) => s + d.accuracy, 0) / CHART_DATA.length);
+
+  // Win rate по активам
+  const assetStats = useMemo(() => ASSETS.map(asset => {
+    const group = history.filter(h => h.asset === asset);
+    const w = group.filter(h => h.result === "WIN").length;
+    return { asset, rate: group.length ? Math.round((w / group.length) * 100) : 0, count: group.length };
+  }).sort((a, b) => b.rate - a.rate), [history]);
+
+  // Серии WIN
+  let maxStreak = 0, curStreak = 0;
+  for (const h of history) {
+    if (h.result === "WIN") { curStreak++; maxStreak = Math.max(maxStreak, curStreak); }
+    else curStreak = 0;
+  }
+
   return (
-    <div className="space-y-6">
-      {/* Stats grid */}
+    <div className="space-y-4">
+      {/* KPI grid */}
       <div className="grid grid-cols-2 gap-3">
-        {ANALYTICS.map((a, i) => (
+        {[
+          { label: "WIN Rate", value: `${winRate}%`, delta: "+3.2%", up: true, icon: "TrendingUp" },
+          { label: "Средняя точность", value: `${avgAccuracy}%`, delta: "+1.8%", up: true, icon: "Target" },
+          { label: "Серия WIN", value: `${maxStreak}`, delta: "подряд", up: true, icon: "Zap" },
+          { label: "Активных пар", value: "10", delta: SESSION_LABEL[getCurrentSession()], up: true, icon: "Globe" },
+        ].map((stat, i) => (
           <div
-            key={a.label}
+            key={stat.label}
             className="rounded-lg border p-4 animate-fade-in"
-            style={{
-              background: "var(--sx-surface)",
-              borderColor: "var(--sx-border)",
-              animationDelay: `${i * 60}ms`,
-              animationFillMode: "both",
-              opacity: 0,
-            }}
+            style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)", animationDelay: `${i * 60}ms`, animationFillMode: "both", opacity: 0 }}
           >
-            <div className="text-[11px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider mb-2">{a.label}</div>
-            <div className="font-mono text-2xl font-semibold text-[var(--sx-text)]">{a.value}</div>
-            {a.delta && (
-              <div
-                className="font-mono text-[11px] mt-1"
-                style={{ color: a.up ? "var(--sx-green)" : "var(--sx-red)" }}
-              >
-                {a.delta} за 24ч
-              </div>
-            )}
+            <div className="flex items-center gap-1.5 mb-2">
+              <Icon name={stat.icon} size={11} className="text-[var(--sx-text-muted)]" />
+              <span className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">{stat.label}</span>
+            </div>
+            <div className="font-mono text-2xl font-bold text-[var(--sx-text)]">{stat.value}</div>
+            <div className="font-mono text-[11px] mt-1" style={{ color: stat.up ? "var(--sx-green)" : "var(--sx-red)" }}>
+              {stat.delta}
+            </div>
           </div>
         ))}
       </div>
 
-      {/* Chart — последние 2 часа */}
-      <div
-        className="rounded-lg border p-4"
-        style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
-      >
+      {/* График точности (1 час) */}
+      <div className="rounded-lg border p-4" style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}>
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Точность за последний час</span>
-          <span className="font-mono text-xs" style={{ color: "var(--sx-green)" }}>
-            {Math.round(CHART_DATA.reduce((s, d) => s + d.accuracy, 0) / CHART_DATA.length)}% avg
-          </span>
+          <span className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Точность сигналов — последний час</span>
+          <span className="font-mono text-xs" style={{ color: chartAvg >= 85 ? "var(--sx-green)" : "var(--sx-yellow)" }}>{chartAvg}% avg</span>
         </div>
-        <div className="font-mono text-[10px] text-[var(--sx-text-dim)] mb-4">
+        <div className="font-mono text-[10px] text-[var(--sx-text-dim)] mb-3">
           {CHART_DATA[0].label} — {CHART_DATA[CHART_DATA.length - 1].label} · шаг 5 мин
         </div>
 
-        {/* Bars */}
-        <div className="flex items-end gap-0.5 h-28 mb-2">
+        {/* Линия тренда поверх баров */}
+        <div className="flex items-end gap-0.5 h-28 mb-2 relative">
           {CHART_DATA.map((d, i) => (
-            <div key={i} className="flex-1 flex flex-col items-center gap-0.5 h-full justify-end group relative">
+            <div key={i} className="flex-1 h-full flex flex-col justify-end group relative">
               <div
-                className="w-full rounded-sm animate-chart-grow transition-opacity"
+                className="w-full rounded-sm animate-chart-grow"
                 style={{
                   height: `${d.accuracy}%`,
-                  background: d.accuracy >= 82 ? "var(--sx-green)" : d.accuracy >= 70 ? "var(--sx-blue)" : "var(--sx-red)",
-                  opacity: 0.85,
+                  background: d.accuracy >= 88 ? "var(--sx-green)" : d.accuracy >= 78 ? "var(--sx-blue)" : "var(--sx-red)",
+                  opacity: 0.8,
                   animationDelay: `${i * 25}ms`,
                   animationFillMode: "both",
                   transformOrigin: "bottom",
                 }}
               />
-              {/* Tooltip on hover */}
               <div
-                className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 pointer-events-none z-10 px-1.5 py-0.5 rounded text-[9px] font-mono whitespace-nowrap transition-opacity"
+                className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 z-10 px-1.5 py-0.5 rounded text-[9px] font-mono whitespace-nowrap"
                 style={{ background: "var(--sx-surface-2)", border: "1px solid var(--sx-border-light)", color: "var(--sx-text)" }}
               >
-                {d.label}<br />{d.accuracy}%
+                {d.label} · {d.accuracy}%
               </div>
             </div>
           ))}
         </div>
-
-        {/* Time axis — показываем каждую 6-ю метку */}
         <div className="flex justify-between">
-          {CHART_DATA.filter((_, i) => i % 6 === 0 || i === CHART_DATA.length - 1).map((d, i) => (
+          {CHART_DATA.filter((_, i) => i % 3 === 0 || i === 11).map((d, i) => (
             <span key={i} className="font-mono text-[9px] text-[var(--sx-text-dim)]">{d.label}</span>
           ))}
         </div>
-
-        {/* Legend */}
         <div className="flex items-center gap-4 mt-3 pt-3 border-t" style={{ borderColor: "var(--sx-border)" }}>
-          {[
-            { color: "var(--sx-green)", label: "≥82% — сильный" },
-            { color: "var(--sx-blue)", label: "70–81% — средний" },
-            { color: "var(--sx-red)", label: "<70% — слабый" },
-          ].map((l) => (
-            <div key={l.label} className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-sm" style={{ background: l.color }} />
-              <span className="font-mono text-[9px] text-[var(--sx-text-dim)]">{l.label}</span>
+          {[{ c: "var(--sx-green)", l: "≥88%" }, { c: "var(--sx-blue)", l: "78–87%" }, { c: "var(--sx-red)", l: "<78%" }].map(({ c, l }) => (
+            <div key={l} className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-sm" style={{ background: c }} />
+              <span className="font-mono text-[9px] text-[var(--sx-text-dim)]">{l}</span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Win/Loss by asset */}
-      <div
-        className="rounded-lg border p-4"
-        style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
-      >
-        <div className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider mb-4">Win Rate по активам</div>
-        <div className="space-y-3">
-          {ASSETS.slice(0, 5).map((asset) => {
-            const rate = Math.floor(randomBetween(65, 93));
-            return (
-              <div key={asset} className="flex items-center gap-3">
-                <span className="font-mono text-xs text-[var(--sx-text-muted)] w-16">{asset}</span>
-                <div className="flex-1 h-1.5 rounded-full" style={{ background: "var(--sx-border)" }}>
-                  <div
-                    className="h-1.5 rounded-full"
-                    style={{
-                      width: `${rate}%`,
-                      background: rate >= 80 ? "var(--sx-green)" : rate >= 70 ? "var(--sx-blue)" : "var(--sx-yellow)",
-                    }}
-                  />
-                </div>
-                <span className="font-mono text-xs w-8 text-right" style={{ color: "var(--sx-text-muted)" }}>
-                  {rate}%
-                </span>
+      {/* WIN Rate по активам */}
+      <div className="rounded-lg border p-4" style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}>
+        <div className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider mb-4">WIN Rate по парам</div>
+        <div className="space-y-2.5">
+          {assetStats.map(({ asset, rate, count }) => (
+            <div key={asset} className="flex items-center gap-3">
+              <span className="font-mono text-[11px] text-[var(--sx-text)] w-16 shrink-0">{asset}</span>
+              <div className="flex-1 h-2 rounded-full overflow-hidden" style={{ background: "var(--sx-border)" }}>
+                <div
+                  className="h-2 rounded-full transition-all"
+                  style={{ width: `${rate}%`, background: rate >= 80 ? "var(--sx-green)" : rate >= 70 ? "var(--sx-blue)" : "var(--sx-yellow)" }}
+                />
               </div>
-            );
-          })}
+              <span className="font-mono text-[11px] w-8 text-right shrink-0" style={{
+                color: rate >= 80 ? "var(--sx-green)" : rate >= 70 ? "var(--sx-blue)" : "var(--sx-yellow)"
+              }}>{rate}%</span>
+              <span className="font-mono text-[10px] text-[var(--sx-text-dim)] w-10 shrink-0">{count} сиг</span>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Support & Resistance levels по парам */}
-      <div
-        className="rounded-lg border p-4"
-        style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
-      >
+      {/* Уровни S/R по парам */}
+      <div className="rounded-lg border p-4" style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}>
         <div className="flex items-center justify-between mb-4">
-          <span className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Уровни поддержки / сопротивления</span>
-          <span className="font-mono text-[10px] text-[var(--sx-text-dim)]">обновлено сейчас</span>
+          <span className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Ключевые уровни S/R</span>
+          <LiveDot />
         </div>
         <div className="space-y-4">
-          {ASSETS.slice(0, 6).map((asset) => {
+          {ASSETS.slice(0, 6).map(asset => {
             const lv = generateLevels(asset);
-            const range = lv.r2 - lv.s2;
-            const pricePct = range > 0 ? ((lv.price - lv.s2) / range) * 100 : 50;
+            const range = lv.r2 - lv.s2 || 1;
+            const pricePct = Math.min(94, Math.max(6, ((lv.price - lv.s2) / range) * 100));
+            const pivotPct = Math.min(94, Math.max(6, ((lv.pivot - lv.s2) / range) * 100));
             return (
               <div key={asset}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="font-mono text-xs text-[var(--sx-text)]">{asset}</span>
-                  <span className="font-mono text-xs tabular-nums text-[var(--sx-text-muted)]">{lv.price}</span>
+                <div className="flex justify-between mb-1.5">
+                  <span className="font-mono text-[11px] text-[var(--sx-text)]">{asset}</span>
+                  <span className="font-mono text-[11px] tabular-nums text-[var(--sx-text-muted)]">{lv.price}</span>
                 </div>
-                {/* Шкала S2 — S1 — Price — R1 — R2 */}
-                <div className="relative h-5">
-                  <div className="absolute inset-y-0 left-0 right-0 flex items-center">
-                    <div className="w-full h-px" style={{ background: "var(--sx-border-light)" }} />
-                  </div>
-                  {/* S2 */}
-                  <div className="absolute top-0 h-full flex flex-col items-center" style={{ left: "0%" }}>
-                    <div className="w-px h-full" style={{ background: "var(--sx-green)", opacity: 0.5 }} />
-                  </div>
-                  {/* S1 */}
-                  <div className="absolute top-0 h-full flex flex-col items-center" style={{ left: "25%" }}>
-                    <div className="w-px h-full" style={{ background: "var(--sx-green)", opacity: 0.8 }} />
-                  </div>
-                  {/* R1 */}
-                  <div className="absolute top-0 h-full flex flex-col items-center" style={{ left: "75%" }}>
-                    <div className="w-px h-full" style={{ background: "var(--sx-red)", opacity: 0.8 }} />
-                  </div>
-                  {/* R2 */}
-                  <div className="absolute top-0 h-full flex flex-col items-center" style={{ left: "100%" }}>
-                    <div className="w-px h-full" style={{ background: "var(--sx-red)", opacity: 0.5 }} />
-                  </div>
-                  {/* Текущая цена — dot */}
+                <div className="relative h-6 rounded" style={{ background: "var(--sx-surface-2)" }}>
+                  {/* Зоны */}
+                  <div className="absolute top-0 left-0 h-full rounded-l" style={{ width: "25%", background: "var(--sx-green-dim)" }} />
+                  <div className="absolute top-0 right-0 h-full rounded-r" style={{ width: "25%", background: "var(--sx-red-dim)" }} />
+                  {/* Пивот */}
+                  <div className="absolute top-0 bottom-0 w-px" style={{ left: `${pivotPct}%`, background: "var(--sx-yellow)", opacity: 0.7 }} />
+                  {/* Цена */}
                   <div
-                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2 animate-pulse-dot"
-                    style={{
-                      left: `${Math.min(95, Math.max(5, pricePct))}%`,
-                      background: "var(--sx-bg)",
-                      borderColor: "var(--sx-text)",
-                    }}
+                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full border-2 z-10"
+                    style={{ left: `${pricePct}%`, background: "var(--sx-bg)", borderColor: "var(--sx-text)" }}
                   />
                 </div>
-                {/* Labels */}
                 <div className="flex justify-between mt-1">
                   <span className="font-mono text-[9px]" style={{ color: "var(--sx-green)", opacity: 0.7 }}>S2 {lv.s2}</span>
                   <span className="font-mono text-[9px]" style={{ color: "var(--sx-green)" }}>S1 {lv.s1}</span>
+                  <span className="font-mono text-[9px]" style={{ color: "var(--sx-yellow)" }}>PP {lv.pivot}</span>
                   <span className="font-mono text-[9px]" style={{ color: "var(--sx-red)" }}>R1 {lv.r1}</span>
                   <span className="font-mono text-[9px]" style={{ color: "var(--sx-red)", opacity: 0.7 }}>R2 {lv.r2}</span>
                 </div>
@@ -560,74 +727,45 @@ function AnalyticsSection() {
   );
 }
 
-function HistorySection() {
-  const wins = HISTORY.filter((h) => h.result === "WIN").length;
+// ─── ИСТОРИЯ ─────────────────────────────────────────────────────────────────
+
+function HistorySection({ history }: { history: ReturnType<typeof generateHistory>[] }) {
+  const wins = history.filter(h => h.result === "WIN").length;
+
   return (
     <div className="space-y-4">
-      {/* Summary */}
       <div className="flex gap-3">
-        <div
-          className="flex-1 rounded-lg border p-3 flex flex-col items-center"
-          style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
-        >
-          <span className="font-mono text-2xl font-semibold" style={{ color: "var(--sx-green)" }}>
-            {wins}
-          </span>
-          <span className="font-mono text-[10px] text-[var(--sx-text-muted)] uppercase tracking-wider mt-1">WIN</span>
-        </div>
-        <div
-          className="flex-1 rounded-lg border p-3 flex flex-col items-center"
-          style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
-        >
-          <span className="font-mono text-2xl font-semibold" style={{ color: "var(--sx-red)" }}>
-            {HISTORY.length - wins}
-          </span>
-          <span className="font-mono text-[10px] text-[var(--sx-text-muted)] uppercase tracking-wider mt-1">LOSS</span>
-        </div>
-        <div
-          className="flex-1 rounded-lg border p-3 flex flex-col items-center"
-          style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
-        >
-          <span className="font-mono text-2xl font-semibold text-[var(--sx-text)]">
-            {Math.round((wins / HISTORY.length) * 100)}%
-          </span>
-          <span className="font-mono text-[10px] text-[var(--sx-text-muted)] uppercase tracking-wider mt-1">Точность</span>
-        </div>
+        {[
+          { label: "WIN", val: wins, color: "var(--sx-green)" },
+          { label: "LOSS", val: history.length - wins, color: "var(--sx-red)" },
+          { label: "Точность", val: `${Math.round(wins / history.length * 100)}%`, color: "var(--sx-text)" },
+        ].map(({ label, val, color }) => (
+          <div key={label} className="flex-1 rounded-lg border p-3 flex flex-col items-center" style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}>
+            <span className="font-mono text-2xl font-bold" style={{ color }}>{val}</span>
+            <span className="font-mono text-[10px] text-[var(--sx-text-muted)] uppercase tracking-wider mt-1">{label}</span>
+          </div>
+        ))}
       </div>
 
-      {/* Table */}
-      <div
-        className="rounded-lg border overflow-hidden"
-        style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
-      >
-        <div
-          className="grid grid-cols-4 px-4 py-2 border-b text-[10px] font-mono uppercase tracking-wider text-[var(--sx-text-muted)]"
-          style={{ borderColor: "var(--sx-border)", background: "var(--sx-surface-2)" }}
-        >
-          <span>Актив</span>
-          <span>Направление</span>
-          <span>Время</span>
-          <span className="text-right">Результат</span>
+      <div className="rounded-lg border overflow-hidden" style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}>
+        <div className="grid grid-cols-5 px-4 py-2 border-b text-[10px] font-mono uppercase tracking-wider text-[var(--sx-text-muted)]"
+          style={{ borderColor: "var(--sx-border)", background: "var(--sx-surface-2)" }}>
+          <span>Актив</span><span>TF</span><span>Напр.</span><span>Время</span><span className="text-right">Итог</span>
         </div>
         <div className="divide-y" style={{ borderColor: "var(--sx-border)" }}>
-          {HISTORY.map((h, i) => (
+          {history.map((h, i) => (
             <div
               key={h.id}
-              className="grid grid-cols-4 px-4 py-2.5 items-center animate-fade-in hover:bg-[var(--sx-surface-2)] transition-colors"
-              style={{ animationDelay: `${i * 30}ms`, animationFillMode: "both", opacity: 0 }}
+              className="grid grid-cols-5 px-4 py-2.5 items-center animate-fade-in hover:bg-[var(--sx-surface-2)] transition-colors"
+              style={{ animationDelay: `${i * 20}ms`, animationFillMode: "both", opacity: 0 }}
             >
-              <span className="font-mono text-xs text-[var(--sx-text)]">{h.asset}</span>
-              <span
-                className="font-mono text-xs"
-                style={{ color: h.direction === "UP" ? "var(--sx-green)" : "var(--sx-red)" }}
-              >
-                {h.direction === "UP" ? "▲" : "▼"} {h.direction}
+              <span className="font-mono text-[11px] text-[var(--sx-text)]">{h.asset}</span>
+              <span className="font-mono text-[10px] text-[var(--sx-text-muted)]">{h.tf}</span>
+              <span className="font-mono text-[11px]" style={{ color: h.direction === "UP" ? "var(--sx-green)" : "var(--sx-red)" }}>
+                {h.direction === "UP" ? "▲" : "▼"}
               </span>
-              <span className="font-mono text-[11px] text-[var(--sx-text-muted)]">{formatDateTime(h.date)}</span>
-              <span
-                className="font-mono text-xs text-right font-semibold"
-                style={{ color: h.result === "WIN" ? "var(--sx-green)" : "var(--sx-red)" }}
-              >
+              <span className="font-mono text-[10px] text-[var(--sx-text-muted)]">{formatDateTime(h.date)}</span>
+              <span className="font-mono text-[11px] text-right font-semibold" style={{ color: h.result === "WIN" ? "var(--sx-green)" : "var(--sx-red)" }}>
                 {h.profit}
               </span>
             </div>
@@ -638,125 +776,81 @@ function HistorySection() {
   );
 }
 
+// ─── НАСТРОЙКИ ───────────────────────────────────────────────────────────────
+
 function SettingsSection() {
-  const [notifications, setNotifications] = useState({ push: true, email: false, sound: true });
-  const [filters, setFilters] = useState({ minAccuracy: 75, assets: ["EUR/USD", "BTC/USD"], timeframes: ["5m", "15m"] });
+  const [notif, setNotif] = useState({ push: true, email: false, sound: true });
+  const [minAcc, setMinAcc] = useState(82);
+  const [selectedPairs, setSelectedPairs] = useState<string[]>([]);
+  const [selectedTf, setSelectedTf] = useState(["1m", "5m", "15m"]);
+
+  const togglePair = (p: string) => setSelectedPairs(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]);
+  const toggleTf = (t: string) => setSelectedTf(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
 
   return (
     <div className="space-y-4">
-      {/* Notifications */}
-      <div
-        className="rounded-lg border p-4 space-y-4"
-        style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
-      >
+      <div className="rounded-lg border p-4 space-y-4" style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}>
         <div className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Уведомления</div>
         {[
-          { key: "push", label: "Push-уведомления", desc: "В браузере и мобильном" },
+          { key: "push", label: "Push-уведомления", desc: "В браузере и на телефоне" },
           { key: "email", label: "Email-уведомления", desc: "На почту при новом сигнале" },
           { key: "sound", label: "Звуковой сигнал", desc: "Звук при получении сигнала" },
-        ].map((item) => (
+        ].map(item => (
           <div key={item.key} className="flex items-center justify-between">
             <div>
               <div className="text-sm font-medium text-[var(--sx-text)]">{item.label}</div>
               <div className="text-[11px] font-mono text-[var(--sx-text-muted)]">{item.desc}</div>
             </div>
             <button
-              onClick={() => setNotifications((n) => ({ ...n, [item.key]: !n[item.key as keyof typeof n] }))}
+              onClick={() => setNotif(n => ({ ...n, [item.key]: !n[item.key as keyof typeof n] }))}
               className="relative w-10 h-5 rounded-full transition-colors"
-              style={{
-                background: notifications[item.key as keyof typeof notifications] ? "var(--sx-green)" : "var(--sx-border-light)",
-              }}
+              style={{ background: notif[item.key as keyof typeof notif] ? "var(--sx-green)" : "var(--sx-border-light)" }}
             >
-              <span
-                className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
-                style={{
-                  left: notifications[item.key as keyof typeof notifications] ? "calc(100% - 18px)" : "2px",
-                }}
-              />
+              <span className="absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all"
+                style={{ left: notif[item.key as keyof typeof notif] ? "calc(100% - 18px)" : "2px" }} />
             </button>
           </div>
         ))}
       </div>
 
-      {/* Filters */}
-      <div
-        className="rounded-lg border p-4 space-y-4"
-        style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
-      >
-        <div className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Фильтры сигналов</div>
+      <div className="rounded-lg border p-4 space-y-4" style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}>
+        <div className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Фильтры</div>
         <div>
           <div className="flex justify-between mb-2">
             <span className="text-sm text-[var(--sx-text)]">Мин. точность</span>
-            <span className="font-mono text-sm" style={{ color: "var(--sx-green)" }}>
-              {filters.minAccuracy}%
-            </span>
+            <span className="font-mono text-sm" style={{ color: "var(--sx-green)" }}>{minAcc}%</span>
           </div>
-          <input
-            type="range"
-            min={50}
-            max={95}
-            value={filters.minAccuracy}
-            onChange={(e) => setFilters((f) => ({ ...f, minAccuracy: +e.target.value }))}
-            className="w-full accent-[var(--sx-green)] cursor-pointer"
-            style={{ accentColor: "var(--sx-green)" }}
-          />
+          <input type="range" min={70} max={95} value={minAcc} onChange={e => setMinAcc(+e.target.value)}
+            className="w-full cursor-pointer" style={{ accentColor: "var(--sx-green)" }} />
           <div className="flex justify-between mt-1">
-            <span className="font-mono text-[10px] text-[var(--sx-text-dim)]">50%</span>
+            <span className="font-mono text-[10px] text-[var(--sx-text-dim)]">70%</span>
             <span className="font-mono text-[10px] text-[var(--sx-text-dim)]">95%</span>
           </div>
         </div>
-
-        {/* Assets */}
         <div>
-          <div className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider mb-2">Активы</div>
+          <div className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider mb-2">Валютные пары</div>
           <div className="flex flex-wrap gap-2">
-            {ASSETS.map((asset) => {
-              const active = filters.assets.includes(asset);
+            {ASSETS.map(pair => {
+              const active = selectedPairs.includes(pair);
               return (
-                <button
-                  key={asset}
-                  onClick={() =>
-                    setFilters((f) => ({
-                      ...f,
-                      assets: active ? f.assets.filter((a) => a !== asset) : [...f.assets, asset],
-                    }))
-                  }
+                <button key={pair} onClick={() => togglePair(pair)}
                   className="px-2.5 py-1 rounded text-[11px] font-mono transition-all"
-                  style={{
-                    background: active ? "var(--sx-green-dim)" : "var(--sx-border)",
-                    color: active ? "var(--sx-green)" : "var(--sx-text-muted)",
-                    border: `1px solid ${active ? "var(--sx-green)" : "var(--sx-border-light)"}`,
-                  }}
-                >
-                  {asset}
+                  style={{ background: active ? "var(--sx-green-dim)" : "var(--sx-border)", color: active ? "var(--sx-green)" : "var(--sx-text-muted)", border: `1px solid ${active ? "var(--sx-green)" : "var(--sx-border-light)"}` }}>
+                  {pair}
                 </button>
               );
             })}
           </div>
         </div>
-
-        {/* Timeframes */}
         <div>
           <div className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider mb-2">Таймфреймы</div>
           <div className="flex gap-2">
-            {["1m", "5m", "15m", "30m", "1h"].map((tf) => {
-              const active = filters.timeframes.includes(tf);
+            {["1m", "5m", "15m"].map(tf => {
+              const active = selectedTf.includes(tf);
               return (
-                <button
-                  key={tf}
-                  onClick={() =>
-                    setFilters((f) => ({
-                      ...f,
-                      timeframes: active ? f.timeframes.filter((t) => t !== tf) : [...f.timeframes, tf],
-                    }))
-                  }
+                <button key={tf} onClick={() => toggleTf(tf)}
                   className="px-3 py-1 rounded text-[11px] font-mono transition-all"
-                  style={{
-                    background: active ? "var(--sx-blue-dim)" : "var(--sx-border)",
-                    color: active ? "var(--sx-blue)" : "var(--sx-text-muted)",
-                    border: `1px solid ${active ? "var(--sx-blue)" : "var(--sx-border-light)"}`,
-                  }}
-                >
+                  style={{ background: active ? "var(--sx-blue-dim)" : "var(--sx-border)", color: active ? "var(--sx-blue)" : "var(--sx-text-muted)", border: `1px solid ${active ? "var(--sx-blue)" : "var(--sx-border-light)"}` }}>
                   {tf}
                 </button>
               );
@@ -765,27 +859,14 @@ function SettingsSection() {
         </div>
       </div>
 
-      {/* Email input */}
-      <div
-        className="rounded-lg border p-4 space-y-3"
-        style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
-      >
+      <div className="rounded-lg border p-4 space-y-3" style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}>
         <div className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Email для уведомлений</div>
         <div className="flex gap-2">
-          <input
-            type="email"
-            placeholder="your@email.com"
-            className="flex-1 px-3 py-2 rounded text-sm font-mono outline-none transition-all"
-            style={{
-              background: "var(--sx-surface-2)",
-              border: "1px solid var(--sx-border-light)",
-              color: "var(--sx-text)",
-            }}
-          />
-          <button
-            className="px-4 py-2 rounded text-sm font-mono font-medium transition-all hover:opacity-90"
-            style={{ background: "var(--sx-green)", color: "#000" }}
-          >
+          <input type="email" placeholder="your@email.com"
+            className="flex-1 px-3 py-2 rounded text-sm font-mono outline-none"
+            style={{ background: "var(--sx-surface-2)", border: "1px solid var(--sx-border-light)", color: "var(--sx-text)" }} />
+          <button className="px-4 py-2 rounded text-sm font-mono font-medium hover:opacity-90 transition-all"
+            style={{ background: "var(--sx-green)", color: "#000" }}>
             Сохранить
           </button>
         </div>
@@ -794,163 +875,131 @@ function SettingsSection() {
   );
 }
 
-// --- Main ---
+// ═══════════════════════════════════════════════════════════════════════════════
+// ГЛАВНЫЙ КОМПОНЕНТ
+// ═══════════════════════════════════════════════════════════════════════════════
+
 const TABS = [
-  { id: "signals", label: "Сигналы", icon: "Zap" },
+  { id: "signals",   label: "Сигналы",   icon: "Zap" },
   { id: "analytics", label: "Аналитика", icon: "BarChart2" },
-  { id: "history", label: "История", icon: "Clock" },
-  { id: "settings", label: "Настройки", icon: "Settings" },
+  { id: "history",   label: "История",   icon: "Clock" },
+  { id: "settings",  label: "Настройки", icon: "Settings" },
 ];
 
 export default function Index() {
   const [activeTab, setActiveTab] = useState("signals");
-  const [signals, setSignals] = useState(INITIAL_SIGNALS);
+  const [signals, setSignals] = useState<Signal[]>(INITIAL_SIGNALS);
+  const [history] = useState(INITIAL_HISTORY);
   const [time, setTime] = useState(new Date());
-  const [newSignalPulse, setNewSignalPulse] = useState(false);
+  const [pulse, setPulse] = useState(false);
   const [activePairs, setActivePairs] = useState<string[]>([]);
 
-  const togglePair = (pair: string) => {
-    setActivePairs((prev) =>
-      prev.includes(pair) ? prev.filter((p) => p !== pair) : [...prev, pair]
-    );
-  };
-
-  const filteredSignals = activePairs.length === 0
-    ? signals
-    : signals.filter((s) => activePairs.includes(s.asset));
-
   useEffect(() => {
-    const timer = setInterval(() => setTime(new Date()), 1000);
-    return () => clearInterval(timer);
+    const t = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setSignals((prev) => {
-        const newSig = generateSignal(Date.now());
-        setNewSignalPulse(true);
-        setTimeout(() => setNewSignalPulse(false), 800);
-        return [newSig, ...prev.slice(0, 11)];
+    const t = setInterval(() => {
+      setSignals(prev => {
+        const s = generateSignal(Date.now());
+        setPulse(true);
+        setTimeout(() => setPulse(false), 800);
+        return [s, ...prev.slice(0, 11)];
       });
-    }, 8000);
-    return () => clearInterval(interval);
+    }, 9000);
+    return () => clearInterval(t);
   }, []);
+
+  const togglePair = (pair: string) =>
+    setActivePairs(prev => prev.includes(pair) ? prev.filter(p => p !== pair) : [...prev, pair]);
+
+  const filtered = activePairs.length === 0 ? signals : signals.filter(s => activePairs.includes(s.asset));
+
+  const aPlus = signals.filter(s => s.quality === "A+").length;
+  const session = getCurrentSession();
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "var(--sx-bg)" }}>
-      {/* Header */}
-      <header
-        className="border-b px-4 py-0 flex items-center justify-between sticky top-0 z-50"
-        style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)", backdropFilter: "blur(8px)" }}
-      >
+
+      {/* Хедер */}
+      <header className="border-b px-4 flex items-center justify-between sticky top-0 z-50"
+        style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)", backdropFilter: "blur(8px)" }}>
         <div className="flex items-center gap-3 py-3">
-          <div
-            className="w-7 h-7 rounded flex items-center justify-center"
-            style={{ background: "var(--sx-green)", color: "#000" }}
-          >
+          <div className="w-7 h-7 rounded flex items-center justify-center" style={{ background: "var(--sx-green)", color: "#000" }}>
             <Icon name="Zap" size={14} />
           </div>
-          <span className="font-mono font-semibold text-sm tracking-wide text-[var(--sx-text)]">SignalX</span>
+          <span className="font-mono font-bold text-sm tracking-wide text-[var(--sx-text)]">SignalX</span>
+          <span className="font-mono text-[10px] px-1.5 py-0.5 rounded" style={{ background: "var(--sx-border)", color: "var(--sx-text-muted)" }}>
+            {SESSION_LABEL[session]}
+          </span>
         </div>
-
         <div className="flex items-center gap-4">
           <LiveDot />
-          <div className="font-mono text-xs tabular-nums text-[var(--sx-text-muted)]">
-            {time.toLocaleTimeString("ru-RU")}
-          </div>
-          <button
-            className="w-7 h-7 rounded flex items-center justify-center transition-colors hover:bg-[var(--sx-border)]"
-            style={{ color: "var(--sx-text-muted)" }}
-          >
+          <span className="font-mono text-xs tabular-nums text-[var(--sx-text-muted)]">{time.toLocaleTimeString("ru-RU")}</span>
+          <button className="w-7 h-7 rounded flex items-center justify-center hover:bg-[var(--sx-border)] transition-colors"
+            style={{ color: "var(--sx-text-muted)" }}>
             <Icon name="Bell" size={15} />
           </button>
         </div>
       </header>
 
-      {/* Ticker */}
-      <div
-        className="border-b overflow-hidden relative"
-        style={{ background: "var(--sx-surface-2)", borderColor: "var(--sx-border)" }}
-      >
+      {/* Тикер */}
+      <div className="border-b overflow-hidden" style={{ background: "var(--sx-surface-2)", borderColor: "var(--sx-border)" }}>
         <div className="flex animate-ticker whitespace-nowrap">
           {[...TICKER_ITEMS, ...TICKER_ITEMS].map((item, i) => (
             <div key={i} className="flex items-center gap-2 px-5 py-1.5 shrink-0">
               <span className="font-mono text-[11px] text-[var(--sx-text-muted)]">{item.pair}</span>
               <span className="font-mono text-[11px] text-[var(--sx-text)]">{item.price}</span>
-              <span
-                className="font-mono text-[10px]"
-                style={{ color: item.delta.startsWith("+") ? "var(--sx-green)" : "var(--sx-red)" }}
-              >
-                {item.delta}
-              </span>
+              <span className="font-mono text-[10px]" style={{ color: item.delta.startsWith("+") ? "var(--sx-green)" : "var(--sx-red)" }}>{item.delta}</span>
               <span className="text-[var(--sx-text-dim)] mx-2">·</span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Main */}
+      {/* Контент */}
       <main className="flex-1 max-w-2xl mx-auto w-full px-4 py-5">
-        {/* Section header */}
+
+        {/* Заголовок секции */}
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="font-mono text-lg font-semibold text-[var(--sx-text)]">
-              {TABS.find((t) => t.id === activeTab)?.label}
+            <h1 className="font-mono text-lg font-bold text-[var(--sx-text)]">
+              {TABS.find(t => t.id === activeTab)?.label}
             </h1>
             {activeTab === "signals" && (
               <div className="font-mono text-[11px] text-[var(--sx-text-muted)] mt-0.5">
-                Активных сигналов: <span style={{ color: "var(--sx-green)" }}>{filteredSignals.length}</span>
-                {activePairs.length > 0 && (
-                  <span className="ml-1" style={{ color: "var(--sx-text-dim)" }}>
-                    · фильтр: {activePairs.length} пар
-                  </span>
-                )}
+                Всего: <span style={{ color: "var(--sx-text)" }}>{filtered.length}</span>
+                {" · "}A+: <span style={{ color: "var(--sx-green)" }}>{aPlus}</span>
+                {activePairs.length > 0 && <span style={{ color: "var(--sx-text-dim)" }}> · фильтр: {activePairs.length} пар</span>}
               </div>
             )}
           </div>
           {activeTab === "signals" && (
             <div
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-mono transition-all ${newSignalPulse ? "scale-105" : ""}`}
-              style={{
-                background: "var(--sx-green-dim)",
-                color: "var(--sx-green)",
-                border: "1px solid var(--sx-green)",
-                transition: "transform 0.2s",
-              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-mono transition-all ${pulse ? "scale-110" : ""}`}
+              style={{ background: "var(--sx-green-dim)", color: "var(--sx-green)", border: "1px solid var(--sx-green)", transition: "transform 0.2s" }}
             >
-              <Icon name="TrendingUp" size={12} />
-              +{signals.length} новых
+              <Icon name="Radio" size={11} />
+              LIVE
             </div>
           )}
         </div>
 
-        {/* Filter bar */}
+        {/* Фильтр по парам (только на вкладке Сигналы) */}
         {activeTab === "signals" && (
-          <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-1 scrollbar-hide">
-            <button
-              onClick={() => setActivePairs([])}
+          <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-1">
+            <button onClick={() => setActivePairs([])}
               className="shrink-0 px-3 py-1 rounded text-[11px] font-mono transition-all"
-              style={{
-                background: activePairs.length === 0 ? "var(--sx-green-dim)" : "var(--sx-border)",
-                color: activePairs.length === 0 ? "var(--sx-green)" : "var(--sx-text-muted)",
-                border: `1px solid ${activePairs.length === 0 ? "var(--sx-green)" : "var(--sx-border-light)"}`,
-              }}
-            >
+              style={{ background: activePairs.length === 0 ? "var(--sx-green-dim)" : "var(--sx-border)", color: activePairs.length === 0 ? "var(--sx-green)" : "var(--sx-text-muted)", border: `1px solid ${activePairs.length === 0 ? "var(--sx-green)" : "var(--sx-border-light)"}` }}>
               Все
             </button>
-            {ASSETS.map((pair) => {
+            {ASSETS.map(pair => {
               const active = activePairs.includes(pair);
               return (
-                <button
-                  key={pair}
-                  onClick={() => togglePair(pair)}
+                <button key={pair} onClick={() => togglePair(pair)}
                   className="shrink-0 px-3 py-1 rounded text-[11px] font-mono transition-all"
-                  style={{
-                    background: active ? "var(--sx-green-dim)" : "var(--sx-border)",
-                    color: active ? "var(--sx-green)" : "var(--sx-text-muted)",
-                    border: `1px solid ${active ? "var(--sx-green)" : "var(--sx-border-light)"}`,
-                  }}
-                >
+                  style={{ background: active ? "var(--sx-green-dim)" : "var(--sx-border)", color: active ? "var(--sx-green)" : "var(--sx-text-muted)", border: `1px solid ${active ? "var(--sx-green)" : "var(--sx-border-light)"}` }}>
                   {pair}
                 </button>
               );
@@ -958,67 +1007,45 @@ export default function Index() {
           </div>
         )}
 
-        {/* Content */}
         {activeTab === "signals" && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {filteredSignals.length > 0 ? (
-              filteredSignals.map((s, i) => (
-                <SignalCard key={s.id} signal={s} index={i} />
-              ))
-            ) : (
-              <div
-                className="col-span-2 py-16 flex flex-col items-center gap-2 rounded-lg border"
-                style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
-              >
+            {filtered.length > 0 ? filtered.map((s, i) => (
+              <SignalCard key={s.id} signal={s} index={i} />
+            )) : (
+              <div className="col-span-2 py-16 flex flex-col items-center gap-2 rounded-lg border"
+                style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}>
                 <Icon name="Search" size={24} className="text-[var(--sx-text-dim)]" />
                 <span className="font-mono text-sm text-[var(--sx-text-muted)]">Нет сигналов по выбранным парам</span>
-                <button
-                  onClick={() => setActivePairs([])}
-                  className="font-mono text-[11px] mt-1"
-                  style={{ color: "var(--sx-green)" }}
-                >
+                <button onClick={() => setActivePairs([])} className="font-mono text-[11px] mt-1" style={{ color: "var(--sx-green)" }}>
                   Сбросить фильтр
                 </button>
               </div>
             )}
           </div>
         )}
-        {activeTab === "analytics" && <AnalyticsSection />}
-        {activeTab === "history" && <HistorySection />}
+
+        {activeTab === "analytics" && <AnalyticsSection history={history} />}
+        {activeTab === "history" && <HistorySection history={history} />}
         {activeTab === "settings" && <SettingsSection />}
       </main>
 
-      {/* Bottom navigation */}
-      <nav
-        className="border-t sticky bottom-0 z-50"
-        style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
-      >
+      {/* Нижняя навигация */}
+      <nav className="border-t sticky bottom-0 z-50" style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}>
         <div className="flex max-w-2xl mx-auto">
-          {TABS.map((tab) => {
+          {TABS.map(tab => {
             const active = activeTab === tab.id;
             return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className="flex-1 flex flex-col items-center py-3 gap-1 transition-colors"
-                style={{ color: active ? "var(--sx-green)" : "var(--sx-text-muted)" }}
-              >
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                className="flex-1 flex flex-col items-center py-3 gap-1 transition-colors relative"
+                style={{ color: active ? "var(--sx-green)" : "var(--sx-text-muted)" }}>
                 <div className="relative">
                   <Icon name={tab.icon} fallback="Circle" size={18} />
-                  {tab.id === "signals" && newSignalPulse && (
-                    <span
-                      className="absolute -top-1 -right-1 w-2 h-2 rounded-full animate-pulse-dot"
-                      style={{ background: "var(--sx-green)" }}
-                    />
+                  {tab.id === "signals" && pulse && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full animate-pulse-dot" style={{ background: "var(--sx-green)" }} />
                   )}
                 </div>
                 <span className="font-mono text-[10px] tracking-wide">{tab.label}</span>
-                {active && (
-                  <span
-                    className="absolute bottom-0 h-0.5 w-8 rounded-full"
-                    style={{ background: "var(--sx-green)" }}
-                  />
-                )}
+                {active && <span className="absolute bottom-0 h-0.5 w-8 rounded-full" style={{ background: "var(--sx-green)" }} />}
               </button>
             );
           })}
