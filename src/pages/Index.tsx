@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import Icon from "@/components/ui/icon";
 
 // --- Mock Data ---
-const ASSETS = ["EUR/USD", "GBP/USD", "USD/JPY", "BTC/USD", "ETH/USD", "AUD/USD", "USD/CAD", "XAU/USD"];
+const ASSETS = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "USD/CHF", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY"];
 
 function randomBetween(min: number, max: number) {
   return Math.random() * (max - min) + min;
@@ -11,13 +11,13 @@ function randomBetween(min: number, max: number) {
 function generateSignal(id: number) {
   const asset = ASSETS[Math.floor(Math.random() * ASSETS.length)];
   const direction = Math.random() > 0.5 ? "UP" : "DOWN";
-  const accuracy = Math.floor(randomBetween(72, 95));
+  const accuracy = Math.floor(randomBetween(82, 98));
   const timeframes = ["1m", "5m", "15m", "30m", "1h"];
   const tf = timeframes[Math.floor(Math.random() * timeframes.length)];
   const now = new Date();
   now.setMinutes(now.getMinutes() - Math.floor(Math.random() * 30));
   const expiry = "3 мин";
-  return { id, asset, direction, accuracy, tf, time: now, expiry, strength: Math.floor(randomBetween(60, 100)) };
+  return { id, asset, direction, accuracy, tf, time: now, expiry, strength: Math.floor(randomBetween(80, 100)) };
 }
 
 function generateHistory(id: number) {
@@ -37,15 +37,15 @@ const ANALYTICS = [
   { label: "Точность сигналов", value: "83%", delta: "+2.4%", up: true },
   { label: "Сигналов сегодня", value: "47", delta: "+12", up: true },
   { label: "WIN Rate (7д)", value: "78%", delta: "-1.2%", up: false },
-  { label: "Активных пар", value: "8", delta: "", up: true },
+  { label: "Активных пар", value: "10", delta: "", up: true },
 ];
 
-// Chart: последние 2 часа, точка каждые 5 минут (24 бара)
+// Chart: последний 1 час, точка каждые 5 минут (12 баров)
 function generateChartData() {
   const now = new Date();
-  return Array.from({ length: 24 }, (_, i) => {
-    const t = new Date(now.getTime() - (23 - i) * 5 * 60 * 1000);
-    const accuracy = Math.floor(randomBetween(58, 97));
+  return Array.from({ length: 12 }, (_, i) => {
+    const t = new Date(now.getTime() - (11 - i) * 5 * 60 * 1000);
+    const accuracy = Math.floor(randomBetween(78, 98));
     return {
       accuracy,
       label: t.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }),
@@ -59,11 +59,13 @@ const TICKER_ITEMS = [
   { pair: "EUR/USD", price: "1.08432", delta: "+0.12%" },
   { pair: "GBP/USD", price: "1.26710", delta: "-0.08%" },
   { pair: "USD/JPY", price: "149.820", delta: "+0.31%" },
-  { pair: "BTC/USD", price: "67,420", delta: "+1.84%" },
-  { pair: "ETH/USD", price: "3,521", delta: "+0.92%" },
-  { pair: "XAU/USD", price: "2,318", delta: "+0.44%" },
   { pair: "AUD/USD", price: "0.65140", delta: "-0.15%" },
   { pair: "USD/CAD", price: "1.36280", delta: "+0.07%" },
+  { pair: "USD/CHF", price: "0.89720", delta: "-0.03%" },
+  { pair: "NZD/USD", price: "0.59830", delta: "+0.18%" },
+  { pair: "EUR/GBP", price: "0.85610", delta: "+0.05%" },
+  { pair: "EUR/JPY", price: "162.340", delta: "+0.43%" },
+  { pair: "GBP/JPY", price: "189.540", delta: "+0.22%" },
 ];
 
 function formatTime(date: Date) {
@@ -187,7 +189,7 @@ function AnalyticsSection() {
         style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}
       >
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Точность за последние 2 часа</span>
+          <span className="text-xs font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Точность за последний час</span>
           <span className="font-mono text-xs" style={{ color: "var(--sx-green)" }}>
             {Math.round(CHART_DATA.reduce((s, d) => s + d.accuracy, 0) / CHART_DATA.length)}% avg
           </span>
