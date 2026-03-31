@@ -55,23 +55,16 @@ function detectZone(levels: Levels): { direction: "UP" | "DOWN"; reason: string;
 }
 
 function generateTA(direction: "UP" | "DOWN") {
-  // RSI согласован с направлением
-  const rsi = direction === "UP"
-    ? Math.floor(randomBetween(28, 52))   // перепроданность → сигнал UP
-    : Math.floor(randomBetween(52, 76));  // перекупленность → сигнал DOWN
-  const macdVal = direction === "UP"
-    ? +(randomBetween(0.0001, 0.0015)).toFixed(4)
-    : +(randomBetween(-0.0015, -0.0001)).toFixed(4);
-  const macdSignal = direction === "UP" ? "BUY" : "SELL";
-  // EMA согласовано
-  const ema9 = direction === "UP" ? 1.0005 : 0.9995;
-  const ema21 = direction === "UP" ? 0.9998 : 1.0002;
-  const emaCross = ema9 > ema21 ? "BUY" : "SELL";
-  // Боллинджер: UP → цена у нижней полосы, DOWN → у верхней
-  const bbPos = direction === "UP"
-    ? Math.floor(randomBetween(5, 30))
-    : Math.floor(randomBetween(70, 95));
-  return { rsi, macdVal, macdSignal, emaCross, bbPos };
+  // Стохастик %K и %D согласованы с направлением
+  // UP → перепроданность (< 20), DOWN → перекупленность (> 80)
+  const stochK = direction === "UP"
+    ? Math.floor(randomBetween(5, 22))
+    : Math.floor(randomBetween(78, 95));
+  const stochD = direction === "UP"
+    ? Math.floor(randomBetween(8, 25))
+    : Math.floor(randomBetween(75, 92));
+  const stochSignal = direction === "UP" ? "BUY" : "SELL";
+  return { stochK, stochD, stochSignal };
 }
 
 function generateSignal(id: number) {
@@ -298,74 +291,75 @@ function SignalCard({ signal, index }: { signal: ReturnType<typeof generateSigna
             </div>
           </div>
 
-          {/* Technical indicators */}
+          {/* Stochastic */}
           <div className="border-t pt-3" style={{ borderColor: "var(--sx-border)" }}>
-            <div className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider mb-2">Индикаторы</div>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-[10px] font-mono text-[var(--sx-text-muted)] uppercase tracking-wider">Стохастик (14,3,3)</span>
+              <span
+                className="font-mono text-[9px] px-1.5 py-0.5 rounded"
+                style={{
+                  background: ta.stochSignal === "BUY" ? "var(--sx-green-dim)" : "var(--sx-red-dim)",
+                  color: ta.stochSignal === "BUY" ? "var(--sx-green)" : "var(--sx-red)",
+                }}
+              >
+                {ta.stochSignal}
+              </span>
+            </div>
 
-              {/* RSI */}
-              <div className="rounded p-2 flex items-center justify-between" style={{ background: "var(--sx-surface-2)" }}>
-                <div>
-                  <div className="font-mono text-[10px] text-[var(--sx-text-muted)]">RSI (14)</div>
-                  <div className="font-mono text-sm font-semibold tabular-nums" style={{
-                    color: ta.rsi >= 70 ? "var(--sx-red)" : ta.rsi <= 30 ? "var(--sx-green)" : "var(--sx-blue)"
-                  }}>
-                    {ta.rsi}
-                  </div>
+            {/* %K line */}
+            <div className="space-y-2">
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="font-mono text-[10px] text-[var(--sx-text-muted)]">%K (быстрый)</span>
+                  <span className="font-mono text-[10px] tabular-nums" style={{
+                    color: ta.stochK < 20 ? "var(--sx-green)" : ta.stochK > 80 ? "var(--sx-red)" : "var(--sx-text-muted)"
+                  }}>{ta.stochK}</span>
                 </div>
-                <div className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{
-                  background: ta.rsi >= 70 ? "var(--sx-red-dim)" : ta.rsi <= 30 ? "var(--sx-green-dim)" : "var(--sx-blue-dim)",
-                  color: ta.rsi >= 70 ? "var(--sx-red)" : ta.rsi <= 30 ? "var(--sx-green)" : "var(--sx-blue)",
-                }}>
-                  {ta.rsi >= 70 ? "Перекуп." : ta.rsi <= 30 ? "Перепрод." : "Нейтрал"}
-                </div>
-              </div>
-
-              {/* MACD */}
-              <div className="rounded p-2 flex items-center justify-between" style={{ background: "var(--sx-surface-2)" }}>
-                <div>
-                  <div className="font-mono text-[10px] text-[var(--sx-text-muted)]">MACD</div>
-                  <div className="font-mono text-sm font-semibold tabular-nums" style={{
-                    color: ta.macdSignal === "BUY" ? "var(--sx-green)" : "var(--sx-red)"
-                  }}>
-                    {ta.macdVal > 0 ? "+" : ""}{ta.macdVal}
-                  </div>
-                </div>
-                <div className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{
-                  background: ta.macdSignal === "BUY" ? "var(--sx-green-dim)" : "var(--sx-red-dim)",
-                  color: ta.macdSignal === "BUY" ? "var(--sx-green)" : "var(--sx-red)",
-                }}>
-                  {ta.macdSignal}
-                </div>
-              </div>
-
-              {/* EMA Cross */}
-              <div className="rounded p-2 flex items-center justify-between" style={{ background: "var(--sx-surface-2)" }}>
-                <div>
-                  <div className="font-mono text-[10px] text-[var(--sx-text-muted)]">EMA 9/21</div>
-                  <div className="font-mono text-[10px] text-[var(--sx-text-muted)]">Пересечение</div>
-                </div>
-                <div className="font-mono text-[9px] px-1.5 py-0.5 rounded" style={{
-                  background: ta.emaCross === "BUY" ? "var(--sx-green-dim)" : "var(--sx-red-dim)",
-                  color: ta.emaCross === "BUY" ? "var(--sx-green)" : "var(--sx-red)",
-                }}>
-                  {ta.emaCross}
-                </div>
-              </div>
-
-              {/* Bollinger */}
-              <div className="rounded p-2" style={{ background: "var(--sx-surface-2)" }}>
-                <div className="font-mono text-[10px] text-[var(--sx-text-muted)] mb-1">Боллинджер</div>
                 <div className="relative h-2 rounded-full" style={{ background: "var(--sx-border)" }}>
+                  {/* Зоны */}
+                  <div className="absolute top-0 left-0 h-full rounded-l-full" style={{ width: "20%", background: "var(--sx-green-dim)" }} />
+                  <div className="absolute top-0 right-0 h-full rounded-r-full" style={{ width: "20%", background: "var(--sx-red-dim)" }} />
+                  {/* Указатель %K */}
                   <div
-                    className="absolute top-0 h-2 w-2 rounded-full -translate-x-1/2 transition-all"
-                    style={{ left: `${ta.bbPos}%`, background: ta.bbPos > 75 ? "var(--sx-red)" : ta.bbPos < 25 ? "var(--sx-green)" : "var(--sx-blue)" }}
+                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2.5 h-2.5 rounded-full border-2 z-10"
+                    style={{
+                      left: `${ta.stochK}%`,
+                      background: "var(--sx-bg)",
+                      borderColor: ta.stochK < 20 ? "var(--sx-green)" : ta.stochK > 80 ? "var(--sx-red)" : "var(--sx-blue)",
+                    }}
                   />
                 </div>
-                <div className="flex justify-between mt-0.5">
-                  <span className="font-mono text-[9px] text-[var(--sx-text-dim)]">нижн.</span>
-                  <span className="font-mono text-[9px] text-[var(--sx-text-dim)]">верхн.</span>
+              </div>
+
+              {/* %D line */}
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="font-mono text-[10px] text-[var(--sx-text-muted)]">%D (сигнальный)</span>
+                  <span className="font-mono text-[10px] tabular-nums" style={{
+                    color: ta.stochD < 20 ? "var(--sx-green)" : ta.stochD > 80 ? "var(--sx-red)" : "var(--sx-text-muted)"
+                  }}>{ta.stochD}</span>
                 </div>
+                <div className="relative h-2 rounded-full" style={{ background: "var(--sx-border)" }}>
+                  <div className="absolute top-0 left-0 h-full rounded-l-full" style={{ width: "20%", background: "var(--sx-green-dim)" }} />
+                  <div className="absolute top-0 right-0 h-full rounded-r-full" style={{ width: "20%", background: "var(--sx-red-dim)" }} />
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-2 h-2 rounded-full z-10"
+                    style={{
+                      left: `${ta.stochD}%`,
+                      background: ta.stochD < 20 ? "var(--sx-green)" : ta.stochD > 80 ? "var(--sx-red)" : "var(--sx-blue)",
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Пересечение */}
+              <div className="flex items-center justify-between pt-1">
+                <span className="font-mono text-[10px] text-[var(--sx-text-muted)]">
+                  {ta.stochK < 20 ? "Зона перепроданности — сигнал покупки" : "Зона перекупленности — сигнал продажи"}
+                </span>
+                <span className="font-mono text-[9px] text-[var(--sx-text-dim)]">
+                  {ta.stochK > ta.stochD ? "%K > %D ▲" : "%K < %D ▼"}
+                </span>
               </div>
             </div>
           </div>
