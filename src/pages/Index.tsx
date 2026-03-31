@@ -560,6 +560,363 @@ function SignalCard({ signal, index }: { signal: Signal; index: number }) {
   );
 }
 
+// ─── 1M CHART ANALYSIS ────────────────────────────────────────────────────────
+
+interface Candle {
+  time: string;       // HH:MM
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;     // условные единицы 0–100
+  ema9: number;
+  ema21: number;
+}
+
+function buildEMA(prices: number[], period: number): number[] {
+  const k = 2 / (period + 1);
+  const result: number[] = [];
+  let prev = prices[0];
+  for (const p of prices) {
+    const ema = p * k + prev * (1 - k);
+    result.push(+ema.toFixed(5));
+    prev = ema;
+  }
+  return result;
+}
+
+function generate1MCandles(asset: string): Candle[] {
+  const base = BASE_PRICES[asset] ?? 1.0;
+  const isJpy = base > 10;
+  const pip = isJpy ? 0.01 : 0.0001;
+  const dec = isJpy ? 3 : 5;
+  const now = new Date();
+
+  // Генерируем реалистичный ценовой ряд с трендом + шумом
+  const n = 90;
+  const closes: number[] = [];
+  let price = base;
+  // Выбираем слабый тренд случайным образом
+  const drift = (Math.random() - 0.48) * pip * 0.5;
+  for (let i = 0; i < n; i++) {
+    price = +(price + drift + (Math.random() - 0.5) * pip * 3).toFixed(dec);
+    closes.push(price);
+  }
+
+  const ema9vals  = buildEMA(closes, 9);
+  const ema21vals = buildEMA(closes, 21);
+
+  return closes.map((c, i) => {
+    const prev = i === 0 ? c : closes[i - 1];
+    const range = pip * rnd(1, 8);
+    const isUp = c >= prev;
+    const open  = +(prev + (Math.random() - 0.5) * pip).toFixed(dec);
+    const high  = +(Math.max(open, c) + range * Math.random()).toFixed(dec);
+    const low   = +(Math.min(open, c) - range * Math.random()).toFixed(dec);
+    const volume = Math.round(rnd(20, 100));
+    const t = new Date(now.getTime() - (n - 1 - i) * 60 * 1000);
+    return {
+      time: t.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" }),
+      open, high, low, close: c,
+      volume,
+      ema9:  ema9vals[i],
+      ema21: ema21vals[i],
+    };
+  });
+}
+
+function detectTrend1M(candles: Candle[]): { dir: "UP" | "DOWN" | "FLAT"; strength: number; desc: string } {
+  const last = candles.slice(-20);
+  const first10 = last.slice(0, 10);
+  const last10  = last.slice(10);
+  const avg1 = first10.reduce((s, c) => s + c.close, 0) / 10;
+  const avg2 = last10.reduce((s, c) => s + c.close, 0) / 10;
+  const delta = avg2 - avg1;
+  const pct = Math.abs(delta / avg1) * 100;
+  const cur = candles[candles.length - 1];
+  const emaUp = cur.ema9 > cur.ema21;
+  if (pct < 0.005) return { dir: "FLAT", strength: 40, desc: "Боковик — цена консолидируется" };
+  if (delta > 0) return { dir: "UP", strength: Math.min(95, Math.round(50 + pct * 5000)), desc: emaUp ? "Восходящий тренд, EMA9 выше EMA21" : "Восходящее движение, EMA пересекаются" };
+  return { dir: "DOWN", strength: Math.min(95, Math.round(50 + pct * 5000)), desc: !emaUp ? "Нисходящий тренд, EMA9 ниже EMA21" : "Нисходящее движение, EMA пересекаются" };
+}
+
+interface PatternHit { bar: number; name: string; dir: "UP" | "DOWN" }
+
+function detectPatterns(candles: Candle[]): PatternHit[] {
+  const hits: PatternHit[] = [];
+  for (let i = 2; i < candles.length; i++) {
+    const c = candles[i], p = candles[i - 1], pp = candles[i - 2];
+    const body = Math.abs(c.close - c.open);
+    const range = c.high - c.low || 0.0001;
+    // Молот (нижняя тень длинная, тело маленькое, снизу)
+    if (c.close > c.open && (c.open - c.low) > body * 2 && body / range < 0.4 && p.close < p.open)
+      hits.push({ bar: i, name: "Молот", dir: "UP" });
+    // Shooting star (верхняя тень длинная)
+    if (c.close < c.open && (c.high - c.open) > body * 2 && body / range < 0.4 && p.close > p.open)
+      hits.push({ bar: i, name: "Shooting Star", dir: "DOWN" });
+    // Бычье поглощение
+    if (p.close < p.open && c.close > c.open && c.open < p.close && c.close > p.open)
+      hits.push({ bar: i, name: "Бычье поглощение", dir: "UP" });
+    // Медвежье поглощение
+    if (p.close > p.open && c.close < c.open && c.open > p.close && c.close < p.open)
+      hits.push({ bar: i, name: "Медвежье поглощение", dir: "DOWN" });
+    // Доджи
+    if (body / range < 0.1 && range > 0)
+      hits.push({ bar: i, name: "Доджи", dir: i % 2 === 0 ? "UP" : "DOWN" });
+  }
+  // Вернуть последние 5 уникальных
+  const seen = new Set<string>();
+  return hits.reverse().filter(h => { const k = h.name; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 5).reverse();
+}
+
+function detectVolumeSpikes(candles: Candle[]): number[] {
+  const avgVol = candles.reduce((s, c) => s + c.volume, 0) / candles.length;
+  return candles.map((c, i) => (c.volume > avgVol * 1.6 ? i : -1)).filter(i => i !== -1);
+}
+
+// Кэш свечей по активу (пересоздаётся при смене)
+const candleCache: Record<string, Candle[]> = {};
+function getCandles(asset: string): Candle[] {
+  if (!candleCache[asset]) candleCache[asset] = generate1MCandles(asset);
+  return candleCache[asset];
+}
+
+function Chart1MBlock() {
+  const [asset, setAsset] = useState("EUR/USD");
+  const candles = useMemo(() => getCandles(asset), [asset]);
+  const trend = useMemo(() => detectTrend1M(candles), [candles]);
+  const patterns = useMemo(() => detectPatterns(candles), [candles]);
+  const volSpikes = useMemo(() => detectVolumeSpikes(candles), [candles]);
+
+  const cur  = candles[candles.length - 1];
+  const prev = candles[candles.length - 2];
+  const priceChange = cur.close - candles[0].close;
+  const priceChangePct = ((priceChange / candles[0].close) * 100).toFixed(3);
+
+  // Диапазон для нормализации графика
+  const allHigh = Math.max(...candles.map(c => c.high));
+  const allLow  = Math.min(...candles.map(c => c.low));
+  const priceRange = allHigh - allLow || 0.0001;
+  const yPct = (v: number) => 100 - ((v - allLow) / priceRange) * 100;
+
+  // Ширина одного бара в % (для SVG)
+  const barW = 100 / candles.length;
+
+  // Строим SVG points для EMA
+  const ema9Line  = candles.map((c, i) => `${(i + 0.5) * barW},${yPct(c.ema9).toFixed(2)}`).join(" ");
+  const ema21Line = candles.map((c, i) => `${(i + 0.5) * barW},${yPct(c.ema21).toFixed(2)}`).join(" ");
+
+  // Волатильность: std(close)
+  const mean = candles.reduce((s, c) => s + c.close, 0) / candles.length;
+  const stdDev = Math.sqrt(candles.reduce((s, c) => s + (c.close - mean) ** 2, 0) / candles.length);
+  const atrPips = +((allHigh - allLow) / (cur.close > 10 ? 0.01 : 0.0001)).toFixed(1);
+
+  // Сигнал на выходе
+  const outSignal = trend.dir === "FLAT"
+    ? { dir: "WAIT", color: "var(--sx-yellow)", label: "ОЖИДАНИЕ", desc: "Боковик — воздержаться от входа" }
+    : trend.dir === "UP"
+    ? { dir: "UP", color: "var(--sx-green)", label: "UP ▲", desc: `Текущее смещение: +${priceChangePct}%` }
+    : { dir: "DOWN", color: "var(--sx-red)", label: "DOWN ▼", desc: `Текущее смещение: ${priceChangePct}%` };
+
+  const isUp = trend.dir === "UP";
+
+  return (
+    <div className="rounded-lg border overflow-hidden" style={{ background: "var(--sx-surface)", borderColor: "var(--sx-border)" }}>
+      {/* Заголовок */}
+      <div className="flex items-center justify-between px-4 py-3 border-b" style={{ borderColor: "var(--sx-border)", background: "var(--sx-surface-2)" }}>
+        <div className="flex items-center gap-2">
+          <Icon name="CandlestickChart" size={13} className="text-[var(--sx-text-muted)]" />
+          <span className="font-mono text-xs text-[var(--sx-text-muted)] uppercase tracking-wider">1M · 90 баров · 1.5 часа</span>
+        </div>
+        <LiveDot />
+      </div>
+
+      {/* Выбор актива */}
+      <div className="flex items-center gap-2 px-4 pt-3 pb-1 overflow-x-auto">
+        {["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "EUR/JPY"].map(a => (
+          <button key={a} onClick={() => setAsset(a)}
+            className="shrink-0 px-2.5 py-1 rounded text-[11px] font-mono transition-all"
+            style={{
+              background: asset === a ? (isUp ? "var(--sx-green-dim)" : "var(--sx-red-dim)") : "var(--sx-border)",
+              color: asset === a ? (isUp ? "var(--sx-green)" : "var(--sx-red)") : "var(--sx-text-muted)",
+              border: `1px solid ${asset === a ? (isUp ? "var(--sx-green)" : "var(--sx-red)") : "var(--sx-border-light)"}`,
+            }}>
+            {a}
+          </button>
+        ))}
+      </div>
+
+      {/* Текущая цена */}
+      <div className="px-4 py-3 flex items-end gap-3">
+        <span className="font-mono text-2xl font-bold text-[var(--sx-text)]">{cur.close}</span>
+        <span className="font-mono text-sm mb-0.5" style={{ color: priceChange >= 0 ? "var(--sx-green)" : "var(--sx-red)" }}>
+          {priceChange >= 0 ? "+" : ""}{priceChangePct}%
+        </span>
+        <span className="font-mono text-xs text-[var(--sx-text-dim)] mb-0.5 ml-auto">H: {cur.high} · L: {cur.low}</span>
+      </div>
+
+      {/* SVG ГРАФИК (свечи + EMA) */}
+      <div className="px-4 pb-1">
+        <svg viewBox="0 0 100 60" className="w-full" style={{ height: 180 }} preserveAspectRatio="none">
+          {/* Сетка */}
+          {[20, 40, 60, 80].map(y => (
+            <line key={y} x1="0" y1={y * 0.6} x2="100" y2={y * 0.6}
+              stroke="var(--sx-border)" strokeWidth="0.3" strokeDasharray="1,1" />
+          ))}
+
+          {/* Свечи */}
+          {candles.map((c, i) => {
+            const x = (i + 0.5) * barW;
+            const candleUp = c.close >= c.open;
+            const color = candleUp ? "var(--sx-green)" : "var(--sx-red)";
+            const yHigh  = yPct(c.high)  * 0.6;
+            const yLow   = yPct(c.low)   * 0.6;
+            const yOpen  = yPct(c.open)  * 0.6;
+            const yClose = yPct(c.close) * 0.6;
+            const bodyTop    = Math.min(yOpen, yClose);
+            const bodyHeight = Math.max(0.3, Math.abs(yClose - yOpen));
+            const isSpike = volSpikes.includes(i);
+            return (
+              <g key={i}>
+                {/* Фитиль */}
+                <line x1={x} y1={yHigh} x2={x} y2={yLow} stroke={color} strokeWidth={isSpike ? "0.6" : "0.3"} strokeOpacity={isSpike ? 1 : 0.7} />
+                {/* Тело */}
+                <rect x={x - barW * 0.35} y={bodyTop} width={barW * 0.7} height={bodyHeight}
+                  fill={color} fillOpacity={isSpike ? 1 : 0.85} />
+                {/* Маркер всплеска объёма */}
+                {isSpike && <circle cx={x} cy={yHigh - 1} r="0.8" fill="var(--sx-yellow)" fillOpacity="0.9" />}
+              </g>
+            );
+          })}
+
+          {/* EMA21 */}
+          <polyline points={ema21Line.replace(/,(\d)/g, (_, n) => `,${(+n * 0.6)}`).split(" ").map((pt, i) => {
+            const [px, py] = pt.split(",").map(Number);
+            return `${px},${(yPct(candles[i]?.ema21 ?? 0) * 0.6).toFixed(2)}`;
+          }).join(" ")}
+            fill="none" stroke="var(--sx-blue)" strokeWidth="0.5" strokeOpacity="0.7" />
+
+          {/* EMA9 */}
+          <polyline points={candles.map((c, i) => `${(i + 0.5) * barW},${(yPct(c.ema9) * 0.6).toFixed(2)}`).join(" ")}
+            fill="none" stroke="var(--sx-yellow)" strokeWidth="0.5" strokeOpacity="0.9" />
+
+          {/* Текущая цена — горизонтальная линия */}
+          <line x1="0" y1={yPct(cur.close) * 0.6} x2="100" y2={yPct(cur.close) * 0.6}
+            stroke={priceChange >= 0 ? "var(--sx-green)" : "var(--sx-red)"} strokeWidth="0.4" strokeDasharray="2,1" strokeOpacity="0.9" />
+        </svg>
+
+        {/* Временная ось */}
+        <div className="flex justify-between mt-1 mb-2">
+          {[0, 22, 44, 66, 89].map(i => (
+            <span key={i} className="font-mono text-[9px] text-[var(--sx-text-dim)]">{candles[i]?.time}</span>
+          ))}
+        </div>
+
+        {/* Легенда */}
+        <div className="flex items-center gap-4 pb-3">
+          {[
+            { c: "var(--sx-yellow)", l: "EMA 9" },
+            { c: "var(--sx-blue)",   l: "EMA 21" },
+            { c: "var(--sx-yellow)", l: "▪ всплеск объёма", dot: true },
+          ].map(({ c, l, dot }) => (
+            <div key={l} className="flex items-center gap-1.5">
+              {dot ? <span className="w-2 h-2 rounded-full" style={{ background: c }} /> : <span className="w-4 border-t" style={{ borderColor: c, borderWidth: "1.5px" }} />}
+              <span className="font-mono text-[9px] text-[var(--sx-text-dim)]">{l}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Объём (мини-бары) */}
+      <div className="px-4 pb-3">
+        <div className="text-[9px] font-mono text-[var(--sx-text-dim)] mb-1 uppercase tracking-wider">Объём (90 баров)</div>
+        <div className="flex items-end gap-px h-8">
+          {candles.map((c, i) => {
+            const isSpike = volSpikes.includes(i);
+            return (
+              <div key={i} className="flex-1 rounded-sm"
+                style={{ height: `${c.volume}%`, background: isSpike ? "var(--sx-yellow)" : (c.close >= c.open ? "var(--sx-green)" : "var(--sx-red)"), opacity: isSpike ? 0.9 : 0.45 }} />
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Итоговые метрики */}
+      <div className="grid grid-cols-4 divide-x border-t" style={{ borderColor: "var(--sx-border)", background: "var(--sx-surface-2)" }}>
+        {[
+          { label: "ATR пипс", value: atrPips },
+          { label: "Паттернов", value: patterns.length },
+          { label: "Всплесков V", value: volSpikes.length },
+          { label: "EMA кросс", value: cur.ema9 > cur.ema21 ? "↑" : "↓" },
+        ].map(({ label, value }) => (
+          <div key={label} className="flex flex-col items-center py-3" style={{ borderColor: "var(--sx-border)" }}>
+            <span className="font-mono text-sm font-bold text-[var(--sx-text)]">{value}</span>
+            <span className="font-mono text-[9px] text-[var(--sx-text-dim)] uppercase tracking-wide mt-0.5">{label}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Тренд и паттерны */}
+      <div className="px-4 py-4 space-y-4 border-t" style={{ borderColor: "var(--sx-border)" }}>
+        {/* Тренд */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="font-mono text-[10px] text-[var(--sx-text-muted)] uppercase tracking-wider">Тренд 1M</span>
+            <div className="flex items-center gap-1.5">
+              <div className="w-16 h-1.5 rounded-full" style={{ background: "var(--sx-border)" }}>
+                <div className="h-1.5 rounded-full" style={{ width: `${trend.strength}%`, background: trend.dir === "UP" ? "var(--sx-green)" : trend.dir === "DOWN" ? "var(--sx-red)" : "var(--sx-yellow)" }} />
+              </div>
+              <span className="font-mono text-[10px] tabular-nums" style={{ color: trend.dir === "UP" ? "var(--sx-green)" : trend.dir === "DOWN" ? "var(--sx-red)" : "var(--sx-yellow)" }}>
+                {trend.strength}%
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 px-2.5 py-2 rounded text-[11px] font-mono"
+            style={{ background: trend.dir === "UP" ? "var(--sx-green-dim)" : trend.dir === "DOWN" ? "var(--sx-red-dim)" : "rgba(255,200,0,0.08)", color: trend.dir === "UP" ? "var(--sx-green)" : trend.dir === "DOWN" ? "var(--sx-red)" : "var(--sx-yellow)" }}>
+            <Icon name={trend.dir === "UP" ? "TrendingUp" : trend.dir === "DOWN" ? "TrendingDown" : "Minus"} size={12} />
+            {trend.desc}
+          </div>
+        </div>
+
+        {/* Паттерны */}
+        {patterns.length > 0 && (
+          <div>
+            <div className="font-mono text-[10px] text-[var(--sx-text-muted)] uppercase tracking-wider mb-2">Свечные паттерны</div>
+            <div className="space-y-1.5">
+              {patterns.map((p, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="font-mono text-[10px] px-1.5 py-0.5 rounded" style={{
+                    background: p.dir === "UP" ? "var(--sx-green-dim)" : "var(--sx-red-dim)",
+                    color: p.dir === "UP" ? "var(--sx-green)" : "var(--sx-red)",
+                  }}>
+                    {p.dir === "UP" ? "▲" : "▼"}
+                  </span>
+                  <span className="font-mono text-[11px] text-[var(--sx-text)]">{p.name}</span>
+                  <span className="font-mono text-[10px] text-[var(--sx-text-dim)] ml-auto">бар {p.bar}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Итоговый сигнал */}
+        <div className="rounded-lg p-3 border" style={{
+          background: outSignal.dir === "UP" ? "var(--sx-green-dim)" : outSignal.dir === "DOWN" ? "var(--sx-red-dim)" : "rgba(255,200,0,0.06)",
+          borderColor: outSignal.color,
+        }}>
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-xs text-[var(--sx-text-muted)] uppercase tracking-wider">Вывод по 1M</span>
+            <span className="font-mono text-sm font-bold" style={{ color: outSignal.color }}>{outSignal.label}</span>
+          </div>
+          <div className="font-mono text-[11px] mt-1.5" style={{ color: outSignal.color }}>
+            {outSignal.desc} · ATR {atrPips} пипс · {volSpikes.length} всплеск(ов) объёма
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── АНАЛИТИКА ────────────────────────────────────────────────────────────────
 
 function AnalyticsSection({ history }: { history: ReturnType<typeof generateHistory>[] }) {
@@ -585,6 +942,9 @@ function AnalyticsSection({ history }: { history: ReturnType<typeof generateHist
 
   return (
     <div className="space-y-4">
+      {/* 1M График за 1.5 часа */}
+      <Chart1MBlock />
+
       {/* KPI grid */}
       <div className="grid grid-cols-2 gap-3">
         {[
