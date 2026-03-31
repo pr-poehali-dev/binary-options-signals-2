@@ -26,29 +26,75 @@ function generateLevels(asset: string) {
   return { price, s1, s2, r1, r2 };
 }
 
-function generateTA() {
-  const rsi = Math.floor(randomBetween(28, 72));
-  const macdVal = +(randomBetween(-0.0015, 0.0015)).toFixed(4);
-  const macdSignal = macdVal > 0 ? "BUY" : "SELL";
-  const ema9 = randomBetween(0.9995, 1.0005);
-  const ema21 = randomBetween(0.9990, 1.0008);
+// Зоны близости к уровню (% от диапазона S2-R2)
+const ZONE_THRESHOLD = 0.12;
+
+type Levels = ReturnType<typeof generateLevels>;
+
+function detectZone(levels: Levels): { direction: "UP" | "DOWN"; reason: string; bonus: number } {
+  const { price, s1, s2, r1, r2 } = levels;
+  const range = r2 - s2;
+  if (range <= 0) return { direction: "UP", reason: "Нейтральная зона", bonus: 0 };
+
+  const distS1 = Math.abs(price - s1) / range;
+  const distS2 = Math.abs(price - s2) / range;
+  const distR1 = Math.abs(price - r1) / range;
+  const distR2 = Math.abs(price - r2) / range;
+
+  // Отскок от поддержки → UP
+  if (distS1 < ZONE_THRESHOLD) return { direction: "UP", reason: `Отскок от S1 (${s1})`, bonus: 8 };
+  if (distS2 < ZONE_THRESHOLD) return { direction: "UP", reason: `Отскок от S2 (${s2})`, bonus: 12 };
+  // Отскок от сопротивления → DOWN
+  if (distR1 < ZONE_THRESHOLD) return { direction: "DOWN", reason: `Отбой от R1 (${r1})`, bonus: 8 };
+  if (distR2 < ZONE_THRESHOLD) return { direction: "DOWN", reason: `Отбой от R2 (${r2})`, bonus: 12 };
+
+  // Цена в нижней половине → склонность UP, в верхней → DOWN
+  const mid = (s2 + r2) / 2;
+  if (price < mid) return { direction: "UP", reason: "Цена ниже середины диапазона", bonus: 3 };
+  return { direction: "DOWN", reason: "Цена выше середины диапазона", bonus: 3 };
+}
+
+function generateTA(direction: "UP" | "DOWN") {
+  // RSI согласован с направлением
+  const rsi = direction === "UP"
+    ? Math.floor(randomBetween(28, 52))   // перепроданность → сигнал UP
+    : Math.floor(randomBetween(52, 76));  // перекупленность → сигнал DOWN
+  const macdVal = direction === "UP"
+    ? +(randomBetween(0.0001, 0.0015)).toFixed(4)
+    : +(randomBetween(-0.0015, -0.0001)).toFixed(4);
+  const macdSignal = direction === "UP" ? "BUY" : "SELL";
+  // EMA согласовано
+  const ema9 = direction === "UP" ? 1.0005 : 0.9995;
+  const ema21 = direction === "UP" ? 0.9998 : 1.0002;
   const emaCross = ema9 > ema21 ? "BUY" : "SELL";
-  const bbPos = Math.floor(randomBetween(10, 90)); // позиция внутри полос Боллинджера %
+  // Боллинджер: UP → цена у нижней полосы, DOWN → у верхней
+  const bbPos = direction === "UP"
+    ? Math.floor(randomBetween(5, 30))
+    : Math.floor(randomBetween(70, 95));
   return { rsi, macdVal, macdSignal, emaCross, bbPos };
 }
 
 function generateSignal(id: number) {
   const asset = ASSETS[Math.floor(Math.random() * ASSETS.length)];
-  const direction = Math.random() > 0.5 ? "UP" : "DOWN";
-  const accuracy = Math.floor(randomBetween(82, 98));
   const timeframes = ["1m", "5m", "15m", "30m", "1h"];
   const tf = timeframes[Math.floor(Math.random() * timeframes.length)];
   const now = new Date();
   now.setMinutes(now.getMinutes() - Math.floor(Math.random() * 30));
   const expiry = "3 мин";
+
+  // Уровни определяют направление
   const levels = generateLevels(asset);
-  const ta = generateTA();
-  return { id, asset, direction, accuracy, tf, time: now, expiry, strength: Math.floor(randomBetween(80, 100)), levels, ta };
+  const zone = detectZone(levels);
+  const direction = zone.direction;
+
+  // Точность и сила усиливаются при близости к S/R
+  const baseAccuracy = Math.floor(randomBetween(80, 90));
+  const accuracy = Math.min(98, baseAccuracy + zone.bonus);
+  const baseStrength = Math.floor(randomBetween(78, 90));
+  const strength = Math.min(100, baseStrength + zone.bonus);
+
+  const ta = generateTA(direction);
+  return { id, asset, direction, accuracy, tf, time: now, expiry, strength, levels, ta, zoneReason: zone.reason };
 }
 
 function generateHistory(id: number) {
@@ -121,7 +167,7 @@ function LiveDot() {
 function SignalCard({ signal, index }: { signal: ReturnType<typeof generateSignal>; index: number }) {
   const isUp = signal.direction === "UP";
   const [expanded, setExpanded] = useState(false);
-  const { levels, ta } = signal;
+  const { levels, ta, zoneReason } = signal;
 
   return (
     <div
@@ -151,6 +197,18 @@ function SignalCard({ signal, index }: { signal: ReturnType<typeof generateSigna
           >
             {isUp ? "▲" : "▼"} {signal.direction}
           </span>
+        </div>
+
+        {/* Zone reason */}
+        <div
+          className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-mono"
+          style={{
+            background: isUp ? "var(--sx-green-dim)" : "var(--sx-red-dim)",
+            color: isUp ? "var(--sx-green)" : "var(--sx-red)",
+          }}
+        >
+          <Icon name={isUp ? "TrendingUp" : "TrendingDown"} size={10} />
+          {zoneReason}
         </div>
 
         {/* Strength bar */}
