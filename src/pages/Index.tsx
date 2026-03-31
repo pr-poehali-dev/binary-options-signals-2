@@ -86,58 +86,8 @@ function LiveDot() {
   );
 }
 
-const EXPIRY_SECONDS = 3 * 60; // 3 минуты
-
-function useCountdown(startedAt: Date) {
-  const elapsed = Math.floor((Date.now() - startedAt.getTime()) / 1000);
-  const initial = Math.max(0, EXPIRY_SECONDS - (elapsed % EXPIRY_SECONDS));
-  const [remaining, setRemaining] = useState(initial);
-
-  useEffect(() => {
-    if (remaining <= 0) return;
-    const t = setInterval(() => setRemaining((r) => (r > 0 ? r - 1 : EXPIRY_SECONDS)), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  const mm = String(Math.floor(remaining / 60)).padStart(2, "0");
-  const ss = String(remaining % 60).padStart(2, "0");
-  const progress = remaining / EXPIRY_SECONDS;
-  const expired = remaining === 0;
-  return { mm, ss, progress, expired };
-}
-
-function CountdownRing({ progress, expired, mm, ss, isUp }: { progress: number; expired: boolean; mm: string; ss: string; isUp: boolean }) {
-  const r = 16;
-  const circ = 2 * Math.PI * r;
-  const dash = circ * progress;
-  const color = expired ? "var(--sx-red)" : progress < 0.25 ? "var(--sx-yellow)" : isUp ? "var(--sx-green)" : "var(--sx-red)";
-  return (
-    <div className="flex items-center gap-1.5">
-      <svg width="40" height="40" className="-rotate-90">
-        <circle cx="20" cy="20" r={r} fill="none" strokeWidth="2.5" stroke="var(--sx-border)" />
-        <circle
-          cx="20" cy="20" r={r} fill="none" strokeWidth="2.5"
-          stroke={color}
-          strokeDasharray={`${dash} ${circ}`}
-          strokeLinecap="round"
-          style={{ transition: "stroke-dasharray 0.9s linear, stroke 0.3s" }}
-        />
-      </svg>
-      <div className="flex flex-col">
-        <span className="font-mono text-[11px] leading-tight" style={{ color: expired ? "var(--sx-red)" : "var(--sx-text-muted)" }}>
-          {expired ? "ИСТЁК" : "осталось"}
-        </span>
-        <span className="font-mono text-sm font-semibold leading-tight tabular-nums" style={{ color }}>
-          {mm}:{ss}
-        </span>
-      </div>
-    </div>
-  );
-}
-
 function SignalCard({ signal, index }: { signal: ReturnType<typeof generateSignal>; index: number }) {
   const isUp = signal.direction === "UP";
-  const { mm, ss, progress, expired } = useCountdown(signal.time);
   return (
     <div
       className="animate-fade-in rounded-lg border p-4 flex flex-col gap-3 transition-all hover:border-[var(--sx-border-light)] cursor-pointer"
@@ -190,7 +140,7 @@ function SignalCard({ signal, index }: { signal: ReturnType<typeof generateSigna
           <Icon name="Clock" size={11} />
           <span className="font-mono text-[11px]">{formatTime(signal.time)}</span>
         </div>
-        <CountdownRing progress={progress} expired={expired} mm={mm} ss={ss} isUp={isUp} />
+        <span className="font-mono text-[11px] text-[var(--sx-text-muted)]">Экспирация: {signal.expiry}</span>
         <div className="flex items-center gap-1">
           <Icon name="Target" size={11} className="text-[var(--sx-text-muted)]" />
           <span className="font-mono text-[11px]" style={{ color: "var(--sx-green)" }}>
